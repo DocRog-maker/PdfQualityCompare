@@ -63,11 +63,15 @@ namespace PdfQualityCompare
         {
             if (!string.IsNullOrEmpty(options.ExplainDocument)) return RunExplain(options);
 
-            List<Pair> pairs = Discover(options);
+            List<string> ignored;
+            List<Pair> pairs = Discover(options, out ignored);
             if (pairs.Count == 0)
             {
                 Console.Error.WriteLine("No document folders to compare. Expected sub-folders with a '" +
                                         options.PdfName + "' inside each root.");
+                if (ignored.Count > 0)
+                    Console.Error.WriteLine("{0} folder(s) held no PDF on either side: {1}",
+                                            ignored.Count, Join(ignored, 8));
                 return 4;
             }
 
@@ -76,6 +80,9 @@ namespace PdfQualityCompare
             Console.WriteLine("Documents : {0}   threads: {1}{2}{3}", pairs.Count, options.Threads,
                               options.Annotations ? "   text diff annotations on" : "",
                               options.Visual ? "   raster diff at " + options.VisualDpi + " dpi" : "");
+            if (ignored.Count > 0)
+                Console.WriteLine("Ignored   : {0} folder(s) with no PDF on either side ({1})",
+                                  ignored.Count, Join(ignored, 5));
             Console.WriteLine();
 
             var results = new DocResult[pairs.Count];
@@ -126,7 +133,8 @@ namespace PdfQualityCompare
         {
             var saved = options.Filter;
             options.Filter = options.ExplainDocument;
-            List<Pair> matches = Discover(options);
+            List<string> ignored;
+            List<Pair> matches = Discover(options, out ignored);
             options.Filter = saved;
 
             if (matches.Count == 0)
@@ -157,14 +165,15 @@ namespace PdfQualityCompare
         {
             if (pair.ReferencePdf == null || pair.CandidatePdf == null)
             {
+                bool refSide = pair.ReferencePdf == null;
                 return new DocResult
                 {
                     Name = pair.Name,
                     ReferencePath = pair.ReferencePdf,
                     CandidatePath = pair.CandidatePdf,
-                    Status = pair.ReferencePdf == null ? "RefMissing" : "CandMissing",
-                    Error = "No " + options.PdfName + " in the " +
-                            (pair.ReferencePdf == null ? options.ReferenceLabel : options.CandidateLabel) + " folder"
+                    Status = refSide ? "RefMissing" : "CandMissing",
+                    Error = (refSide ? options.ReferenceLabel : options.CandidateLabel) + ": " +
+                            WhyNoPdf(refSide ? pair.ReferenceDir : pair.CandidateDir, options.PdfName)
                 };
             }
 
@@ -235,12 +244,20 @@ namespace PdfQualityCompare
         private sealed class Pair
         {
             public string Name;
+            public string ReferenceDir;
+            public string CandidateDir;
             public string ReferencePdf;
             public string CandidatePdf;
         }
 
-        private static List<Pair> Discover(Options options)
+        /// <param name="ignored">
+        /// Folder names that hold no PDF on either side. A benchmark root usually carries
+        /// bookkeeping folders alongside the converted documents - ConversionTimes, Report
+        /// and so on - and listing those as failures would bury the real ones.
+        /// </param>
+        private static List<Pair> Discover(Options options, out List<string> ignored)
         {
+            ignored = new List<string>();
             var names = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
             var refDirs = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             var candDirs = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -268,9 +285,20 @@ namespace PdfQualityCompare
                 refDirs.TryGetValue(name, out rd);
                 candDirs.TryGetValue(name, out cd);
 
+                // Only skip when there is no PDF at all on either side. A folder that holds
+                // PDFs we could not choose between still gets reported, so an ambiguous
+                // layout surfaces as an error rather than vanishing from the report.
+                if (!ContainsPdf(rd) && !ContainsPdf(cd))
+                {
+                    ignored.Add(name);
+                    continue;
+                }
+
                 pairs.Add(new Pair
                 {
                     Name = name,
+                    ReferenceDir = rd,
+                    CandidateDir = cd,
                     ReferencePdf = PdfIn(rd, options.PdfName),
                     CandidatePdf = PdfIn(cd, options.PdfName)
                 });
@@ -278,6 +306,44 @@ namespace PdfQualityCompare
                 if (options.Limit > 0 && pairs.Count >= options.Limit) break;
             }
             return pairs;
+        }
+
+        /// <summary>Comma separated list, truncated so a long tail of folder names stays readable.</summary>
+        private static string Join(List<string> names, int max)
+        {
+            int shown = Math.Min(max, names.Count);
+            string text = string.Join(", ", names.GetRange(0, shown).ToArray());
+            return names.Count > shown ? text + ", +" + (names.Count - shown) + " more" : text;
+        }
+
+        /// <summary>
+        /// Says which of the several reasons a PDF could not be chosen applies, since
+        /// "the folder is not there", "the conversion produced nothing" and "there are
+        /// several PDFs and no way to tell which" call for quite different responses.
+        /// </summary>
+        private static string WhyNoPdf(string dir, string pdfName)
+        {
+            if (dir == null) return "no folder of this name";
+
+            string[] found;
+            try { found = Directory.GetFiles(dir, "*.pdf", SearchOption.TopDirectoryOnly); }
+            catch (Exception ex) { return "folder could not be read (" + ex.Message + ")"; }
+
+            if (found.Length == 0) return "no PDF in the folder";
+            return found.Length + " PDFs in the folder and none named " + pdfName;
+        }
+
+        private static bool ContainsPdf(string dir)
+        {
+            if (dir == null) return false;
+            try
+            {
+                return Directory.GetFiles(dir, "*.pdf", SearchOption.TopDirectoryOnly).Length > 0;
+            }
+            catch (Exception)
+            {
+                return false;   // unreadable folders are not documents we can compare
+            }
         }
 
         private static string PdfIn(string dir, string pdfName)

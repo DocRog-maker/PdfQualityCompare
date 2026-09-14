@@ -15,6 +15,12 @@ where the same document folder names appear under both roots — one root being 
 output you trust (for example the MS Office conversion), the other the output you are
 assessing.
 
+A folder that holds no PDF on either side is not a document, so bookkeeping folders that
+sit alongside the conversions — `ConversionTimes`, `Report` and the like — are ignored and
+kept out of the report. The count of what was skipped is printed at the start of the run.
+A folder with a PDF on only one side is a different matter and is always reported: that is
+a conversion that produced nothing.
+
 ## Running it
 
 ```bash
