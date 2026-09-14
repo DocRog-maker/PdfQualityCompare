@@ -1,0 +1,34 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net481</TargetFramework>
+    <PlatformTarget>x64</PlatformTarget>
+    <LangVersion>7.3</LangVersion>
+    <AssemblyName>PdfQualityCompare</AssemblyName>
+    <RootNamespace>PdfQualityCompare</RootNamespace>
+    <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
+    <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Apryse (PDFTron) SDK - same binary the Sanitization project uses. -->
+    <Reference Include="PDFNet">
+      <HintPath>..\packages\PDFTron.NetFramework.x64.12.0.0\lib\net40\PDFNet.dll</HintPath>
+    </Reference>
+    <Reference Include="System.Drawing" />
+  </ItemGroup>
+
+  <!--
+    If the sibling Sanitization project already holds a license key, reuse it so the
+    tool runs with no extra setup. Otherwise pass a key on the command line, or set
+    the APRYSE_LICENSE_KEY environment variable.
+  -->
+  <PropertyGroup Condition="Exists('..\Sanitization\LicenseKey.cs')">
+    <DefineConstants>$(DefineConstants);LOCAL_LICENSE_KEY</DefineConstants>
+  </PropertyGroup>
+  <ItemGroup Condition="Exists('..\Sanitization\LicenseKey.cs')">
+    <Compile Include="..\Sanitization\LicenseKey.cs" Link="LicenseKey.cs" />
+  </ItemGroup>
+
+</Project>
