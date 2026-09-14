@@ -12,10 +12,8 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- Apryse (PDFTron) SDK - same binary the Sanitization project uses. -->
-    <Reference Include="PDFNet">
-      <HintPath>..\packages\PDFTron.NetFramework.x64.12.0.0\lib\net40\PDFNet.dll</HintPath>
-    </Reference>
+    <!-- Apryse (PDFTron) SDK, restored from nuget.org so the repo stands on its own. -->
+    <PackageReference Include="PDFTron.NetFramework.x64" Version="12.0.0" />
     <Reference Include="System.Drawing" />
   </ItemGroup>
 

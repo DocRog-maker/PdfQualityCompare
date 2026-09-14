@@ -118,11 +118,27 @@ Measured against this corpus (100 docx conversions, office vs apryse-20260914):
 
 ## Building
 
-.NET Framework 4.8.1, x64. References the `PDFTron.NetFramework.x64.12.0.0` package already
-vendored in `../packages`, and picks up `../Sanitization/LicenseKey.cs` automatically when
-it exists. Otherwise pass `--license`, set `APRYSE_LICENSE_KEY`, or drop the key in
-`apryse-license.txt` next to the executable.
+.NET Framework 4.8.1, x64. The Apryse SDK comes from NuGet
+(`PDFTron.NetFramework.x64` 12.0.0), so a clone needs nothing else:
 
 ```bash
-dotnet build PdfQualityCompare/PdfQualityCompare.csproj -c Release
+dotnet restore
+dotnet build -c Release
 ```
+
+The .NET Framework 4.8.1 targeting pack must be installed — Visual Studio ships it, or
+install it on its own from the Microsoft .NET download pages.
+
+## Licensing
+
+The tool needs an Apryse license key, and looks for one in this order:
+
+1. `--license <key>` on the command line
+2. the `APRYSE_LICENSE_KEY` environment variable
+3. `apryse-license.txt` next to the executable
+4. a `PDFTronLicense` class compiled into the build
+
+The last of those only applies when the project sits next to a `Sanitization` project
+holding a `LicenseKey.cs`, which is how it was originally developed; the csproj picks that
+file up automatically if it is there and ignores it if it is not. Standalone, use one of the
+first three. No key is stored in this repository.
