@@ -121,6 +121,32 @@ namespace PdfQualityCompare
         public double CandidateShare;
     }
 
+    /// <summary>One symbol that appeared in a different encoding on each side.</summary>
+    internal sealed class SymbolSubstitution
+    {
+        /// <summary>Which symbol it was: "tick", "bullet".</summary>
+        public string Symbol;
+        public int ReferenceCodepoint;
+        public int CandidateCodepoint;
+    }
+
+    /// <summary>
+    /// A difference that was only a change of encoding - the same marks drawn on both
+    /// sides, reported as a difference because the two runs spelled them differently.
+    /// </summary>
+    internal sealed class SymbolEncodingDiff
+    {
+        /// <summary>The TextDiffID the comparison gave both halves of the difference.</summary>
+        public string Id;
+        /// <summary>
+        /// The symbols that changed encoding within it, each listed once. More than one
+        /// when the comparison merged neighbouring symbols into a single difference.
+        /// </summary>
+        public List<SymbolSubstitution> Substitutions = new List<SymbolSubstitution>();
+        /// <summary>Highlights removed under this ID, across both documents.</summary>
+        public int Annotations;
+    }
+
     /// <summary>The comparison of one document pair.</summary>
     internal sealed class DocResult
     {
@@ -168,6 +194,24 @@ namespace PdfQualityCompare
         public int ReferenceNonEmbedded;
         public int CandidateNonEmbedded;
 
+        /// <summary>
+        /// Both documents drew on exactly the same typefaces, with nothing newly
+        /// unembedded. Substituting a font reflows the text, so the layout and reading
+        /// order of a document that failed this test says more about the substitution
+        /// than about the converter's layout engine; the report aggregates this subset
+        /// separately for that reason.
+        /// </summary>
+        public bool FontsMatch
+        {
+            get
+            {
+                return Status == "Compared"
+                    && MissingFonts.Count == 0
+                    && ExtraFonts.Count == 0
+                    && CandidateNonEmbedded <= ReferenceNonEmbedded;
+            }
+        }
+
         // --- layout (measured on matched words) ---
         public int ReferenceLines;
         public int CandidateLines;
@@ -193,20 +237,36 @@ namespace PdfQualityCompare
 
         // --- Apryse text diff annotations ---
         public bool TextDiffRun;
-        /// <summary>Contiguous blocks of change the SDK found; a deletion plus its replacement counts once.</summary>
+        /// <summary>
+        /// Contiguous blocks of change the SDK found; a deletion plus its replacement
+        /// counts once. Symbols that only changed encoding are not among them - see
+        /// SuppressedSymbolDiffs.
+        /// </summary>
         public int TextDiffDifferences;
         /// <summary>Highlight annotations the SDK actually added, across both documents.</summary>
         public int TextDiffAnnotations;
         public int ReferenceDiffAnnotations;
         public int CandidateDiffAnnotations;
+        /// <summary>
+        /// Differences that were the same symbol on both sides in different encodings, and
+        /// so were struck off both documents before the counts above were taken. They are
+        /// not included in TextDiffDifferences either.
+        /// </summary>
+        public List<SymbolEncodingDiff> SuppressedSymbolDiffs = new List<SymbolEncodingDiff>();
+        /// <summary>Highlight annotations those differences accounted for, across both sides.</summary>
+        public int SuppressedSymbolAnnotations;
+        /// <summary>The saved candidate carrying the highlights, when there were any.</summary>
         public string HighlightPdfPath;
+        /// <summary>Why the highlighted copy could not be written. The counts are still valid.</summary>
+        public string HighlightError;
+        /// <summary>Dump of every annotation on both sides, including each one's raw dictionary.</summary>
+        public string AnnotationLogPath;
 
         // --- optional raster comparison ---
         public bool VisualRun;
         public double VisualDiffPct = double.NaN;   // mean % of differing pixels over compared pages
         public double WorstPageDiffPct = double.NaN;
         public int WorstPageIndex = -1;
-        public string DiffPdfPath;
 
         // --- scores ---
         /// <summary>Page correspondence, kept so the raster check compares the same pages the metrics did.</summary>

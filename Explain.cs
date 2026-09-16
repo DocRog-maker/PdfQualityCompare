@@ -26,7 +26,9 @@ namespace PdfQualityCompare
 
             PageAligner.Alignment pages = PageAligner.Align(a, b);
             DocResult r = DocumentComparer.Compare(name, a, b, options);
-            if (options.Annotations) TextDiffAnnotations.Measure(r, referencePdf, candidatePdf, options);
+            // Measure only: diagnosing one document should not leave files behind.
+            if (options.Annotations)
+                TextDiffAnnotations.Measure(r, referencePdf, candidatePdf, options, null);
             DocumentComparer.LayoutAlignment layout = DocumentComparer.AnalyzeLayout(a, b, pages);
 
             PrintScores(r);
@@ -51,6 +53,13 @@ namespace PdfQualityCompare
             if (r.TextDiffRun)
                 Console.WriteLine("  Apryse text diff: {0} annotations over {1} differences ({2} reference, {3} candidate)",
                     r.TextDiffAnnotations, r.TextDiffDifferences, r.ReferenceDiffAnnotations, r.CandidateDiffAnnotations);
+            if (r.SuppressedSymbolDiffs.Count > 0)
+            {
+                Console.WriteLine("  ignored {0} difference(s) ({1} annotations) that were only a change of encoding:",
+                    r.SuppressedSymbolDiffs.Count, r.SuppressedSymbolAnnotations);
+                foreach (SymbolEncodingDiff d in r.SuppressedSymbolDiffs)
+                    Console.WriteLine("    TextDiffID {0}: {1}", d.Id, SymbolEncodingDiffs.Describe(d));
+            }
             Console.WriteLine();
         }
 

@@ -1,5 +1,7 @@
 using System;
+using System.Globalization;
 using System.IO;
+using System.Text;
 using pdftron.PDF;
 
 namespace PdfQualityCompare
@@ -15,61 +17,324 @@ namespace PdfQualityCompare
     /// </summary>
     internal static class TextDiffAnnotations
     {
-        public static void Measure(DocResult result, string referencePdf, string candidatePdf, Options options)
+        /// <param name="diffsDirectory">
+        /// Where to save the marked-up candidate. Passing null measures without saving.
+        /// The document is saved here rather than by a second pass, because the highlights
+        /// already exist in memory at this point and redoing the comparison to get them
+        /// back would double the cost of the run.
+        /// </param>
+        /// <summary>
+        /// HighlightTextDiff has been observed to fail intermittently when several
+        /// comparisons run at once, on a document that succeeds every time on its own.
+        /// One retry turns a lost measurement back into a reported one; a document that
+        /// fails twice is reported as unmeasured rather than quietly counted as zero.
+        /// </summary>
+        private const int Attempts = 2;
+
+        public static void Measure(DocResult result, string referencePdf, string candidatePdf,
+                                   Options options, string diffsDirectory)
         {
-            PDFDoc a = null, b = null;
-            try
+            for (int attempt = 1; attempt <= Attempts; attempt++)
             {
-                a = new PDFDoc(referencePdf);
-                b = new PDFDoc(candidatePdf);
-                a.InitSecurityHandler();
-                b.InitSecurityHandler();
+                PDFDoc a = null, b = null;
+                try
+                {
+                    a = new PDFDoc(referencePdf);
+                    b = new PDFDoc(candidatePdf);
+                    a.InitSecurityHandler();
+                    b.InitSecurityHandler();
 
-                int beforeA = CountAnnotations(a), beforeB = CountAnnotations(b);
+                    int beforeA = CountAnnotations(a), beforeB = CountAnnotations(b);
 
-                int differences = PDFDoc.HighlightTextDiff(a, b, BuildOptions(options));
+                    int differences = PDFDoc.HighlightTextDiff(a, b, BuildOptions(options));
 
-                result.TextDiffDifferences = differences;
-                result.ReferenceDiffAnnotations = Math.Max(0, CountAnnotations(a) - beforeA);
-                result.CandidateDiffAnnotations = Math.Max(0, CountAnnotations(b) - beforeB);
-                result.TextDiffAnnotations = result.ReferenceDiffAnnotations + result.CandidateDiffAnnotations;
-                result.TextDiffRun = true;
-            }
-            catch (Exception ex)
-            {
-                result.TextDiffRun = false;
-                if (string.IsNullOrEmpty(result.Error)) result.Error = "text diff: " + ex.Message;
-            }
-            finally
-            {
-                if (a != null) a.Dispose();
-                if (b != null) b.Dispose();
+                    // Before anything is counted: a symbol that changed encoding but not
+                    // appearance is not a difference, and leaving those in would put one
+                    // against every ticked checkbox and every bullet in the corpus.
+                    SymbolEncodingDiffs.Outcome symbols = SymbolEncodingDiffs.Remove(a, b);
+                    result.SuppressedSymbolDiffs = symbols.Diffs;
+                    result.SuppressedSymbolAnnotations = symbols.Annotations;
+                    if (symbols.Error != null && string.IsNullOrEmpty(result.HighlightError))
+                        result.HighlightError = "symbol encoding suppression: " + symbols.Error;
+
+                    result.TextDiffDifferences = Math.Max(0, differences - symbols.Diffs.Count);
+                    result.ReferenceDiffAnnotations = Math.Max(0, CountAnnotations(a) - beforeA);
+                    result.CandidateDiffAnnotations = Math.Max(0, CountAnnotations(b) - beforeB);
+                    result.TextDiffAnnotations = result.ReferenceDiffAnnotations + result.CandidateDiffAnnotations;
+                    result.TextDiffRun = true;
+
+                    // Nothing was highlighted, so a saved copy would be the candidate unchanged.
+                    if (diffsDirectory != null && result.CandidateDiffAnnotations > 0)
+                        Save(result, b, diffsDirectory);
+
+                    // Suppressed symbols are worth a log of their own even when nothing is
+                    // left highlighted: that is the run where the count went to zero, and
+                    // the reason for it should be on record.
+                    if (diffsDirectory != null && (result.TextDiffAnnotations > 0 || symbols.Diffs.Count > 0))
+                        LogAnnotations(result, a, b, diffsDirectory, options);
+
+                    return;
+                }
+                catch (Exception ex)
+                {
+                    result.TextDiffRun = false;
+                    if (attempt == Attempts && string.IsNullOrEmpty(result.Error))
+                        result.Error = "text diff: " + ex.Message;
+                }
+                finally
+                {
+                    if (a != null) a.Dispose();
+                    if (b != null) b.Dispose();
+                }
             }
         }
 
         /// <summary>
-        /// Redoes the comparison and saves both marked-up documents, so the annotations
-        /// behind a count can actually be read.
+        /// Saves the highlighted candidate. Kept apart from the measurement and given its
+        /// own error handling: the counts are already correct by the time we get here, and
+        /// a document that will not write out should not lose its metrics as well.
         /// </summary>
-        public static string WriteHighlighted(string referencePdf, string candidatePdf,
-                                              string directory, string baseName, Options options)
+        private static void Save(DocResult result, PDFDoc doc, string directory)
         {
-            using (var a = new PDFDoc(referencePdf))
-            using (var b = new PDFDoc(candidatePdf))
+            string target = Path.Combine(directory, SafeFileName(result.Name) + ".highlight-candidate.pdf");
+
+            if (target.Length >= 260)
             {
-                a.InitSecurityHandler();
-                b.InitSecurityHandler();
-
-                PDFDoc.HighlightTextDiff(a, b, BuildOptions(options));
-
-                Directory.CreateDirectory(directory);
-                string refOut = Path.Combine(directory, baseName + ".highlight-reference.pdf");
-                string candOut = Path.Combine(directory, baseName + ".highlight-candidate.pdf");
-
-                a.Save(refOut, pdftron.SDF.SDFDoc.SaveOptions.e_remove_unused);
-                b.Save(candOut, pdftron.SDF.SDFDoc.SaveOptions.e_remove_unused);
-                return candOut;
+                // Saving to an over-long path fails without raising anything, so say so
+                // rather than reporting a file that is not there.
+                result.HighlightError = "path is " + target.Length +
+                    " characters, over the Windows limit of 259; use a shorter --out directory";
+                return;
             }
+
+            string failure = TrySave(doc, target, pdftron.SDF.SDFDoc.SaveOptions.e_remove_unused)
+                          ?? TrySave(doc, target, (pdftron.SDF.SDFDoc.SaveOptions)0);
+
+            if (failure == null) result.HighlightPdfPath = target;
+            else result.HighlightError = failure;
+        }
+
+        /// <summary>Saves, and confirms a file actually appeared. Returns null on success.</summary>
+        private static string TrySave(PDFDoc doc, string target, pdftron.SDF.SDFDoc.SaveOptions flags)
+        {
+            try
+            {
+                doc.Save(target, flags);
+                return File.Exists(target) ? null : "save reported success but wrote no file";
+            }
+            catch (Exception ex)
+            {
+                return ex.Message;
+            }
+        }
+
+        /// <summary>
+        /// Writes out every annotation on both documents, with the whole of each one's
+        /// dictionary rather than the handful of properties the typed API exposes. The
+        /// comparison engine records what it found in its own keys, so dumping the raw
+        /// dictionary is the only way to see what a given highlight actually says.
+        /// </summary>
+        private static void LogAnnotations(DocResult result, PDFDoc reference, PDFDoc candidate,
+                                           string directory, Options options)
+        {
+            string target = Path.Combine(directory, SafeFileName(result.Name) + ".annotations.txt");
+            try
+            {
+                // With a BOM, so the bullets and accented text in /T survive being opened
+                // in an editor that would otherwise guess the code page.
+                using (var writer = new StreamWriter(target, false, new UTF8Encoding(true)))
+                {
+                    writer.WriteLine("Document    : {0}", result.Name);
+                    writer.WriteLine("Generated   : {0:yyyy-MM-dd HH:mm:ss}", DateTime.Now);
+                    if (result.SuppressedSymbolDiffs.Count > 0)
+                        writer.WriteLine("Differences : {0} kept of the {1} HighlightTextDiff reported",
+                            result.TextDiffDifferences,
+                            result.TextDiffDifferences + result.SuppressedSymbolDiffs.Count);
+                    else
+                        writer.WriteLine("Differences : {0} reported by HighlightTextDiff", result.TextDiffDifferences);
+                    writer.WriteLine("Annotations : {0} ({1} {2}, {3} {4})",
+                        result.TextDiffAnnotations,
+                        result.ReferenceDiffAnnotations, options.ReferenceLabel,
+                        result.CandidateDiffAnnotations, options.CandidateLabel);
+                    WriteSuppressedSymbols(writer, result, options);
+
+                    WriteSide(writer, options.ReferenceLabel, reference);
+                    WriteSide(writer, options.CandidateLabel, candidate);
+                }
+                result.AnnotationLogPath = target;
+            }
+            catch (Exception ex)
+            {
+                if (string.IsNullOrEmpty(result.HighlightError))
+                    result.HighlightError = "annotation log: " + ex.Message;
+            }
+        }
+
+        /// <summary>
+        /// Records the encoding-only differences that were struck off, so the counts above
+        /// can be reconciled with what the SDK originally reported. The annotations
+        /// themselves are gone by now, which is exactly why they need naming here.
+        /// </summary>
+        private static void WriteSuppressedSymbols(TextWriter writer, DocResult result, Options options)
+        {
+            if (result.SuppressedSymbolDiffs.Count == 0) return;
+
+            writer.WriteLine("Suppressed  : {0} difference(s), {1} annotation(s), removed from both documents " +
+                             "as symbols that only changed encoding",
+                             result.SuppressedSymbolDiffs.Count, result.SuppressedSymbolAnnotations);
+
+            writer.WriteLine("              each pair below is the {0} /T then the {1} /T",
+                             options.ReferenceLabel, options.CandidateLabel);
+            foreach (SymbolEncodingDiff d in result.SuppressedSymbolDiffs)
+                writer.WriteLine("              TextDiffID {0}: {1}", d.Id, SymbolEncodingDiffs.Describe(d));
+        }
+
+        private static void WriteSide(TextWriter writer, string label, PDFDoc doc)
+        {
+            writer.WriteLine();
+            writer.WriteLine("=== {0} ===", label);
+
+            int pages = doc.GetPageCount();
+            int found = 0;
+
+            for (int p = 1; p <= pages; p++)
+            {
+                Page page = doc.GetPage(p);
+                if (page == null || !page.IsValid()) continue;
+
+                int count = page.GetNumAnnots();
+                for (int i = 0; i < count; i++)
+                {
+                    Annot annot;
+                    try { annot = page.GetAnnot(i); }
+                    catch (Exception ex) { writer.WriteLine("  [p{0} #{1}] unreadable: {2}", p, i, ex.Message); continue; }
+                    if (annot == null || !annot.IsValid()) continue;
+
+                    found++;
+                    WriteAnnotation(writer, p, i, annot);
+                }
+            }
+
+            if (found == 0) writer.WriteLine("  (no annotations)");
+        }
+
+        private static void WriteAnnotation(TextWriter writer, int page, int index, Annot annot)
+        {
+            writer.WriteLine();
+            writer.Write("  [p{0} #{1}] {2}", page, index, Describe(annot));
+
+            string contents = null;
+            try { contents = annot.GetContents(); }
+            catch (Exception) { }
+            if (!string.IsNullOrEmpty(contents))
+                writer.Write("  contents={0}", Quote(contents));
+            writer.WriteLine();
+
+            // The full dictionary, which is where any custom data lives.
+            pdftron.SDF.Obj sdf = null;
+            try { sdf = annot.GetSDFObj(); }
+            catch (Exception) { }
+
+            if (sdf == null || !sdf.IsDict())
+            {
+                writer.WriteLine("    (no dictionary)");
+                return;
+            }
+
+            try
+            {
+                // Depth 1, not 0: every annotation's /P points at its page, and expanding
+                // that prints the whole page dictionary against every single highlight.
+                for (pdftron.SDF.DictIterator it = sdf.GetDictIterator(); it.HasNext(); it.Next())
+                    writer.WriteLine("    /{0,-14} {1}", it.Key().GetName(), Format(it.Value(), 1));
+            }
+            catch (Exception ex)
+            {
+                writer.WriteLine("    (dictionary could not be read: {0})", ex.Message);
+            }
+        }
+
+        private static string Describe(Annot annot)
+        {
+            string type;
+            try { type = annot.GetType().ToString().Replace("e_", ""); }
+            catch (Exception) { type = "?"; }
+
+            try
+            {
+                Rect r = annot.GetRect();
+                r.Normalize();
+                return string.Format(CultureInfo.InvariantCulture, "{0} rect=({1:0.#},{2:0.#})-({3:0.#},{4:0.#})",
+                                     type, r.x1, r.y1, r.x2, r.y2);
+            }
+            catch (Exception) { return type; }
+        }
+
+        /// <summary>
+        /// Renders one PDF object. Indirect references are named rather than followed:
+        /// an annotation points back at its page, and expanding that would walk the whole
+        /// document and never terminate.
+        /// </summary>
+        private static string Format(pdftron.SDF.Obj obj, int depth)
+        {
+            if (obj == null) return "(null)";
+
+            try
+            {
+                if (obj.IsNull()) return "null";
+                if (obj.IsBool()) return obj.GetBool() ? "true" : "false";
+                if (obj.IsNumber()) return obj.GetNumber().ToString("0.####", CultureInfo.InvariantCulture);
+                if (obj.IsName()) return "/" + obj.GetName();
+                if (obj.IsString()) return Quote(obj.GetAsPDFText());
+
+                if (obj.IsIndirect() && depth > 0)
+                    return "obj " + obj.GetObjNum() + " R";
+
+                if (obj.IsArray())
+                {
+                    if (depth >= 3) return "[...]";
+                    var sb = new StringBuilder("[");
+                    int n = obj.Size();
+                    for (int i = 0; i < n && i < 12; i++)
+                    {
+                        if (i > 0) sb.Append(' ');
+                        sb.Append(Format(obj.GetAt(i), depth + 1));
+                    }
+                    if (n > 12) sb.Append(" \u2026 +").Append(n - 12);
+                    return sb.Append(']').ToString();
+                }
+
+                if (obj.IsDict() || obj.IsStream())
+                {
+                    if (depth >= 3) return "<<...>>";
+                    var sb = new StringBuilder("<<");
+                    for (pdftron.SDF.DictIterator it = obj.GetDictIterator(); it.HasNext(); it.Next())
+                        sb.Append(" /").Append(it.Key().GetName()).Append(' ').Append(Format(it.Value(), depth + 1));
+                    sb.Append(" >>");
+                    if (obj.IsStream()) sb.Append(" stream(").Append(obj.GetRawStreamLength()).Append(" bytes)");
+                    return sb.ToString();
+                }
+
+                return "(unhandled type)";
+            }
+            catch (Exception ex)
+            {
+                return "(unreadable: " + ex.Message + ")";
+            }
+        }
+
+        private static string Quote(string s)
+        {
+            if (s == null) return "\"\"";
+            s = s.Replace("\r", "\\r").Replace("\n", "\\n");
+            if (s.Length > 200) s = s.Substring(0, 200) + "\u2026";
+            return "\"" + s + "\"";
+        }
+
+        private static string SafeFileName(string name)
+        {
+            foreach (char c in Path.GetInvalidFileNameChars()) name = name.Replace(c, '_');
+            return name.Length > 120 ? name.Substring(0, 120) : name;
         }
 
         private static TextDiffOptions BuildOptions(Options options)

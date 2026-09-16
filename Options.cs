@@ -44,9 +44,6 @@ namespace PdfQualityCompare
         /// <summary>Number of text difference hunks recorded per document for the detail report.</summary>
         public int MaxHunks = 40;
 
-        /// <summary>Emit an Apryse side-by-side visual diff PDF for the N worst documents.</summary>
-        public int DiffPdfWorst;
-
         public string License;
 
         /// <summary>Name (or unique prefix) of a single document to diagnose instead of running a batch.</summary>
@@ -82,12 +79,12 @@ Options:
   --layout-tolerance <pt> Residual line displacement counted as misplaced (default: 3.0).
   --case-sensitive        Treat text case as significant (default: ignore case).
   --ignore-punctuation    Strip punctuation before comparing text.
-  --no-annotations        Skip the Apryse HighlightTextDiff annotation count.
+  --no-annotations        Skip the Apryse HighlightTextDiff pass, so no annotation counts
+                          are reported and no highlighted PDFs are written.
   --highlight-moves       Let that comparison also highlight moved text (counts moves as differences).
   --visual                Also rasterise and measure pixel differences (slow).
   --visual-dpi <n>        DPI for the raster comparison (default: 72).
   --visual-threshold <n>  Grey delta 0-255 counted as a pixel difference (default: 32).
-  --diff-pdf <n>          Write Apryse visual diff and text-highlight PDFs for the n worst documents.
   --max-hunks <n>         Text difference hunks kept per document (default: 40).
   --weights t,l,f,p       Overall score weights for text, layout, font, page (default 0.30,0.25,0.25,0.20).
   --explain <folder>      Diagnose one document (name or unique prefix) and print why it scored as it did.
@@ -150,8 +147,6 @@ Example:
                         o.VisualDpi = NextDouble(args, ref i, ref error); o.Visual = true; break;
                     case "--visual-threshold":
                         o.VisualThreshold = NextInt(args, ref i, ref error); break;
-                    case "--diff-pdf":
-                        o.DiffPdfWorst = NextInt(args, ref i, ref error); break;
                     case "--max-hunks":
                         o.MaxHunks = NextInt(args, ref i, ref error); break;
                     case "--ref-label":

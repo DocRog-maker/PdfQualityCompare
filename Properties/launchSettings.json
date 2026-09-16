@@ -1,0 +1,8 @@
+{
+  "profiles": {
+    "PdfQualityCompare": {
+      "commandName": "Project",
+      "commandLineArgs": "-r C:\\benchmark-qualitron\\office-small -c C:\\benchmark-qualitron\\apryse-small -o C:\\reports\\apryse-20260914-small --ref-label office --cand-label apryse"
+    }
+  }
+}

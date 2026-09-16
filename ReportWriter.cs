@@ -23,12 +23,13 @@ namespace PdfQualityCompare
                 "ref_words","cand_words","content_matched_words","lost_words","gained_words",
                 "content_similarity","reading_order_similarity","moved_words","diff_truncated",
                 "ref_fonts","cand_fonts","missing_fonts","extra_fonts","font_divergence",
-                "ref_non_embedded","cand_non_embedded","missing_font_names","extra_font_names",
+                "ref_non_embedded","cand_non_embedded","fonts_match","missing_font_names","extra_font_names",
                 "ref_lines","cand_lines","identical_lines","placed_words","offset_x","offset_y",
                 "median_displacement_pt","p95_displacement_pt","max_displacement_pt",
                 "misplaced_words","misplaced_pct","reflowed_words","shifted_pages",
                 "median_width_ratio","width_outliers","font_size_changes",
                 "text_diff_annotations","text_diff_differences","ref_diff_annotations","cand_diff_annotations",
+                "encoding_diffs_ignored","encoding_annotations_ignored","encoding_diffs_detail",
                 "visual_diff_pct","worst_page_diff_pct","worst_page","error"
             }));
 
@@ -45,6 +46,7 @@ namespace PdfQualityCompare
                     r.DiffTruncated ? "1" : "0",
                     I(r.ReferenceFontCount), I(r.CandidateFontCount), I(r.MissingFonts.Count), I(r.ExtraFonts.Count),
                     N(r.FontUsageDivergence, 5), I(r.ReferenceNonEmbedded), I(r.CandidateNonEmbedded),
+                    r.FontsMatch ? "1" : "0",
                     Q(FontList(r.MissingFonts, true)), Q(FontList(r.ExtraFonts, false)),
                     I(r.ReferenceLines), I(r.CandidateLines), I(r.MatchedLines), I(r.PlacedWords),
                     N(r.GlobalOffsetX), N(r.GlobalOffsetY),
@@ -53,11 +55,21 @@ namespace PdfQualityCompare
                     N(r.MedianWidthRatio, 4), I(r.WidthOutliers), I(r.FontSizeChanges),
                     I(r.TextDiffAnnotations), I(r.TextDiffDifferences),
                     I(r.ReferenceDiffAnnotations), I(r.CandidateDiffAnnotations),
+                    I(r.SuppressedSymbolDiffs.Count), I(r.SuppressedSymbolAnnotations),
+                    Q(EncodingDiffList(r.SuppressedSymbolDiffs)),
                     N(r.VisualDiffPct, 3), N(r.WorstPageDiffPct, 3), I(r.WorstPageIndex), Q(r.Error)
                 }));
             }
 
             File.WriteAllText(path, sb.ToString(), new UTF8Encoding(true));
+        }
+
+        /// <summary>"bullet U+00B7/U+F0B7; tick U+2713/U+F0FC" - what was ignored and why.</summary>
+        private static string EncodingDiffList(List<SymbolEncodingDiff> diffs)
+        {
+            var parts = new List<string>();
+            foreach (SymbolEncodingDiff d in diffs) parts.Add(SymbolEncodingDiffs.Describe(d));
+            return string.Join("; ", parts.ToArray());
         }
 
         private static string FontList(List<FontDelta> fonts, bool useReferenceShare)
@@ -155,6 +167,7 @@ namespace PdfQualityCompare
             sb.Append(",\"fontDivergence\":").Append(Jn(r.FontUsageDivergence, 5));
             sb.Append(",\"refNonEmbedded\":").Append(r.ReferenceNonEmbedded);
             sb.Append(",\"candNonEmbedded\":").Append(r.CandidateNonEmbedded);
+            sb.Append(",\"fontsMatch\":").Append(r.FontsMatch ? "true" : "false");
             AppendFonts(sb, "missingFonts", r.MissingFonts);
             AppendFonts(sb, "extraFonts", r.ExtraFonts);
             AppendFonts(sb, "sharedFonts", r.SharedFonts);
@@ -181,13 +194,38 @@ namespace PdfQualityCompare
             sb.Append(",\"textDiffDifferences\":").Append(r.TextDiffDifferences);
             sb.Append(",\"refDiffAnnotations\":").Append(r.ReferenceDiffAnnotations);
             sb.Append(",\"candDiffAnnotations\":").Append(r.CandidateDiffAnnotations);
+            sb.Append(",\"encodingDiffsIgnored\":").Append(r.SuppressedSymbolDiffs.Count);
+            sb.Append(",\"encodingAnnotationsIgnored\":").Append(r.SuppressedSymbolAnnotations);
+            sb.Append(",\"encodingDiffs\":[");
+            for (int i = 0; i < r.SuppressedSymbolDiffs.Count; i++)
+            {
+                SymbolEncodingDiff d = r.SuppressedSymbolDiffs[i];
+                if (i > 0) sb.Append(',');
+                sb.Append("{\"id\":").Append(Js(d.Id))
+                  .Append(",\"annotations\":").Append(d.Annotations)
+                  .Append(",\"describe\":").Append(Js(SymbolEncodingDiffs.Describe(d)))
+                  .Append(",\"substitutions\":[");
+                for (int j = 0; j < d.Substitutions.Count; j++)
+                {
+                    SymbolSubstitution s = d.Substitutions[j];
+                    if (j > 0) sb.Append(',');
+                    sb.Append("{\"symbol\":").Append(Js(s.Symbol))
+                      .Append(",\"ref\":").Append(Js(SymbolEncodingDiffs.Hex(s.ReferenceCodepoint)))
+                      .Append(",\"cand\":").Append(Js(SymbolEncodingDiffs.Hex(s.CandidateCodepoint)))
+                      .Append('}');
+                }
+                sb.Append("]}");
+            }
+            sb.Append(']');
             sb.Append(",\"highlightPdf\":").Append(Js(r.HighlightPdfPath));
+            sb.Append(",\"highlightError\":").Append(Js(r.HighlightError));
+            sb.Append(",\"annotationLog\":").Append(Js(r.AnnotationLogPath));
+
 
             sb.Append(",\"visualRun\":").Append(r.VisualRun ? "true" : "false");
             sb.Append(",\"visualDiffPct\":").Append(Jn(r.VisualDiffPct, 3));
             sb.Append(",\"worstPageDiffPct\":").Append(Jn(r.WorstPageDiffPct, 3));
             sb.Append(",\"worstPage\":").Append(r.WorstPageIndex);
-            sb.Append(",\"diffPdf\":").Append(Js(r.DiffPdfPath));
 
             sb.Append(",\"hunks\":[");
             for (int i = 0; i < r.Hunks.Count; i++)
@@ -298,6 +336,8 @@ h1{font-size:20px;margin:0 0 4px}
 .card{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px 16px;min-width:150px;flex:1}
 .card .v{font-size:22px;font-weight:600}
 .card .l{color:var(--muted);font-size:12px;margin-top:2px}
+.striphead{font-size:14px;font-weight:600;margin:4px 0 4px}
+.stripnote{color:var(--muted);font-size:12.5px;margin:0 0 12px;max-width:70ch}
 .controls{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:12px}
 input[type=search],select{background:var(--panel);color:var(--fg);border:1px solid var(--line);
   border-radius:6px;padding:6px 10px;font:inherit}
@@ -339,6 +379,13 @@ tbody tr:hover{background:var(--panel)}
 <h1>PDF conversion quality report</h1>
 <div class=""sub"" id=""sub""></div>
 <div class=""cards"" id=""cards""></div>
+<div id=""subset"" hidden>
+  <h2 class=""striphead"" id=""subsethead""></h2>
+  <p class=""stripnote"">Substituting a font reflows the text, so the figures above are partly a
+     measure of font substitution. These repeat them over the documents whose fonts came
+     through unchanged, which isolates the layout and text behaviour on its own.</p>
+  <div class=""cards"" id=""cards2""></div>
+</div>
 <div class=""controls"">
   <input type=""search"" id=""q"" placeholder=""Filter by document name or font&hellip;"">
   <select id=""only"">
@@ -348,6 +395,7 @@ tbody tr:hover{background:var(--panel)}
     <option value=""text"">Text content lost or added</option>
     <option value=""order"">Reading order scrambled</option>
     <option value=""marks"">Apryse text diff found differences</option>
+    <option value=""fontsok"">Fonts came through unchanged</option>
     <option value=""layout"">Words misplaced or reflowed</option>
     <option value=""err"">Errors only</option>
   </select>
@@ -384,24 +432,45 @@ document.getElementById('sub').innerHTML =
   '</code> &middot; ' + docs.length + ' documents &middot; ' + esc(DATA.generated) +
   ' &middot; layout tolerance ' + DATA.layoutTolerance + 'pt';
 
-function mean(f) { const v = docs.filter(d => d.status === 'Compared').map(f).filter(x => x !== null && !isNaN(x)); return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null; }
-function pct(f) { const c = docs.filter(d => d.status === 'Compared'); return c.length ? 100 * c.filter(f).length / c.length : 0; }
+const compared = docs.filter(d => d.status === 'Compared');
+const fontMatched = compared.filter(d => d.fontsMatch);
 
-const cards = [
-  ['Mean overall score', fmt(mean(d => d.overall)), ''],
-  ['Mean content similarity', fmt(100 * mean(d => d.similarity), 2) + '%', ''],
-  ['Page count differs', fmt(pct(d => d.refPages !== d.candPages)) + '%', 'of documents'],
-  ['Missing fonts', fmt(pct(d => d.missingFonts.length > 0)) + '%', 'of documents'],
-  ['Mean misplaced words', fmt(mean(d => d.misplacedPct)) + '%', 'of positioned words'],
-  ['Failed', docs.filter(d => d.status !== 'Compared').length, 'documents']
-];
-if (docs.some(d => d.textDiffRun)) {
-  const marks = docs.filter(d => d.textDiffRun).reduce((a, d) => a + d.textDiffAnnotations, 0);
-  cards.push(['Apryse diff marks', marks, 'annotations in total']);
+function mean(set, f) { const v = set.map(f).filter(x => x !== null && x !== undefined && !isNaN(x)); return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null; }
+function pct(set, f) { return set.length ? 100 * set.filter(f).length / set.length : 0; }
+
+function buildCards(set, includeFailed) {
+  const cards = [
+    ['Mean overall score', fmt(mean(set, d => d.overall)), ''],
+    ['Mean content similarity', fmt(100 * mean(set, d => d.similarity), 2) + '%', ''],
+    ['Mean reading order', fmt(100 * mean(set, d => d.readingOrder), 2) + '%', ''],
+    ['Page count differs', fmt(pct(set, d => d.refPages !== d.candPages)) + '%', 'of documents'],
+    ['Mean misplaced words', fmt(mean(set, d => d.misplacedPct)) + '%', 'of positioned words']
+  ];
+  if (includeFailed) {
+    cards.splice(3, 0, ['Missing fonts', fmt(pct(set, d => d.missingFonts.length > 0)) + '%', 'of documents']);
+    cards.push(['Failed', docs.filter(d => d.status !== 'Compared').length, 'documents']);
+  }
+  if (set.some(d => d.textDiffRun)) {
+    const marks = set.filter(d => d.textDiffRun).reduce((a, d) => a + d.textDiffAnnotations, 0);
+    cards.push(['Apryse diff marks', marks, 'annotations in total']);
+  }
+  if (DATA.visual) cards.push(['Mean pixel difference', fmt(mean(set, d => d.visualDiffPct), 2) + '%', '']);
+  return cards;
 }
-if (DATA.visual) cards.push(['Mean pixel difference', fmt(mean(d => d.visualDiffPct), 2) + '%', '']);
-document.getElementById('cards').innerHTML = cards.map(c =>
+
+const renderCards = (id, cards) => document.getElementById(id).innerHTML = cards.map(c =>
   '<div class=""card""><div class=""v"">' + c[1] + '</div><div class=""l"">' + c[0] + (c[2] ? ' <span style=""opacity:.6"">' + c[2] + '</span>' : '') + '</div></div>').join('');
+
+renderCards('cards', buildCards(compared, true));
+
+// Fonts that survived intact leave layout and text free to be judged on their own.
+if (fontMatched.length) {
+  document.getElementById('subset').hidden = false;
+  document.getElementById('subsethead').textContent =
+    'Fonts unchanged — ' + fontMatched.length + ' of ' + compared.length + ' documents (' +
+    fmt(100 * fontMatched.length / compared.length) + '%)';
+  renderCards('cards2', buildCards(fontMatched, false));
+}
 
 let sortKey = 'overall', sortDir = 1;
 
@@ -418,6 +487,7 @@ function visible() {
     if (only === 'text') return d.similarity < 0.99;
     if (only === 'order') return d.readingOrder < d.similarity - 0.02;
     if (only === 'marks') return d.textDiffAnnotations > 0;
+    if (only === 'fontsok') return d.fontsMatch;
     if (only === 'layout') return d.misplacedWords > 0 || d.reflowedWords > 0;
     if (only === 'err') return d.status !== 'Compared';
     return true;
@@ -483,6 +553,10 @@ function detail(d) {
       ? d.textDiffAnnotations + ' marks over ' + d.textDiffDifferences + ' differences ('
         + d.refDiffAnnotations + ' on ' + DATA.referenceLabel + ', ' + d.candDiffAnnotations + ' on ' + DATA.candidateLabel + ')'
       : 'not run'],
+    ['Encoding-only differences ignored', d.encodingDiffsIgnored
+      ? d.encodingDiffsIgnored + ' (' + d.encodingAnnotationsIgnored + ' marks removed from both sides): '
+        + d.encodingDiffs.map(e => e.describe).join('; ')
+      : 'none'],
     ['Lines', d.refLines + ' → ' + d.candLines + ', ' + d.identicalLines + ' identical'],
     ['Words positioned for layout', d.placedWords],
     ['Global offset', d.offsetX + ', ' + d.offsetY + ' pt'],
@@ -516,10 +590,11 @@ function detail(d) {
       (h.cand ? '<span class=""c"">' + esc(h.cand) + '</span>' : '') + '</div>';
   }).join('');
 
-  if (d.diffPdf || d.highlightPdf) {
-    html += '<h3>Marked up copies</h3><div class=""kv"">';
-    if (d.diffPdf) html += '<div><span>overlay:</span> ' + esc(d.diffPdf) + '</div>';
-    if (d.highlightPdf) html += '<div><span>highlights:</span> ' + esc(d.highlightPdf) + '</div>';
+  if (d.highlightPdf || d.annotationLog || d.highlightError) {
+    html += '<h3>Annotations</h3><div class=""kv"">';
+    if (d.highlightPdf) html += '<div><span>highlighted PDF:</span> ' + esc(d.highlightPdf) + '</div>';
+    if (d.annotationLog) html += '<div><span>annotation dump:</span> ' + esc(d.annotationLog) + '</div>';
+    if (d.highlightError) html += '<div class=""b""><span>not written:</span> ' + esc(d.highlightError) + '</div>';
     html += '</div>';
   }
   html += '<h3>Files</h3><div class=""kv""><div><span>' + esc(DATA.referenceLabel) + ':</span> ' + esc(d.refPath) +

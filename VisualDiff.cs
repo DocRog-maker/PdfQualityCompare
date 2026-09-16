@@ -176,38 +176,5 @@ namespace PdfQualityCompare
             return 100.0 * differing / n;
         }
 
-        /// <summary>
-        /// Writes the Apryse overlay diff: reference in red, candidate in blue, matching
-        /// content in black. This is the artefact to open when a score needs explaining.
-        /// </summary>
-        public static string WriteDiffPdf(string referencePdf, string candidatePdf, string outputPath)
-        {
-            using (var a = new PDFDoc(referencePdf))
-            using (var b = new PDFDoc(candidatePdf))
-            using (var outDoc = new PDFDoc())
-            {
-                a.InitSecurityHandler();
-                b.InitSecurityHandler();
-
-                var opts = new DiffOptions();
-                opts.SetColorA(new ColorPt(0.85, 0.10, 0.10));
-                opts.SetColorB(new ColorPt(0.10, 0.25, 0.85));
-                opts.SetBlendMode(pdftron.PDF.GState.BlendMode.e_bl_multiply);
-
-                int pagesA = a.GetPageCount(), pagesB = b.GetPageCount();
-                int total = Math.Max(pagesA, pagesB);
-                for (int i = 1; i <= total; i++)
-                {
-                    Page pa = i <= pagesA ? a.GetPage(i) : null;
-                    Page pb = i <= pagesB ? b.GetPage(i) : null;
-                    try { outDoc.AppendVisualDiff(pa, pb, opts); }
-                    catch (Exception) { /* a page only one side has may be refused; keep going */ }
-                }
-
-                Directory.CreateDirectory(Path.GetDirectoryName(outputPath));
-                outDoc.Save(outputPath, pdftron.SDF.SDFDoc.SaveOptions.e_remove_unused);
-                return outputPath;
-            }
-        }
     }
 }

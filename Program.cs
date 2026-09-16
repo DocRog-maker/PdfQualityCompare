@@ -85,18 +85,49 @@ namespace PdfQualityCompare
                                   ignored.Count, Join(ignored, 5));
             Console.WriteLine();
 
+            Directory.CreateDirectory(options.OutputDir);
+
+            // Created up front because the comparison workers save into it as they go.
+            string diffsDir = null;
+            if (options.Annotations)
+            {
+                diffsDir = Path.Combine(options.OutputDir, "diffs");
+                Directory.CreateDirectory(diffsDir);
+            }
+
             var results = new DocResult[pairs.Count];
             int done = 0;
+            // Workers inside a comparison right now, and the highest count already drawn.
+            int busy = 0, drawn = 0;
+            // Time spent comparing, summed over all workers; divided by the wall clock at
+            // the end it gives the mean number of threads that were actually working,
+            // which is the figure that says whether the thread count is being used.
+            long busyTicks = 0;
             var clock = Stopwatch.StartNew();
 
             var po = new ParallelOptions { MaxDegreeOfParallelism = options.Threads };
             Parallel.For(0, pairs.Count, po, i =>
             {
-                results[i] = CompareOne(pairs[i], options);
-                int n = Interlocked.Increment(ref done);
-                if (n % 5 == 0 || n == pairs.Count) ReportProgress(n, pairs.Count, clock);
+                Interlocked.Increment(ref busy);
+                long started = Stopwatch.GetTimestamp();
+                try
+                {
+                    results[i] = CompareOne(pairs[i], options, diffsDir);
+
+                    Interlocked.Add(ref busyTicks, Stopwatch.GetTimestamp() - started);
+                    int n = Interlocked.Increment(ref done);
+
+                    // Reported before this worker leaves the count, so it is included.
+                    if ((n % 5 == 0 || n == pairs.Count) && Claim(ref drawn, n))
+                        ReportProgress(n, pairs.Count, Volatile.Read(ref busy), options.Threads, clock);
+                }
+                finally
+                {
+                    Interlocked.Decrement(ref busy);
+                }
             });
             Console.WriteLine();
+            ReportOccupancy(pairs.Count, busyTicks, options.Threads, clock);
             Console.WriteLine();
 
             var list = new List<DocResult>(results);
@@ -107,9 +138,6 @@ namespace PdfQualityCompare
                 return a.OverallScore.CompareTo(b.OverallScore);
             });
 
-            if (options.DiffPdfWorst > 0) WriteDiffPdfs(list, options);
-
-            Directory.CreateDirectory(options.OutputDir);
             string csv = Path.Combine(options.OutputDir, "summary.csv");
             string json = Path.Combine(options.OutputDir, "details.json");
             string html = Path.Combine(options.OutputDir, "report.html");
@@ -121,6 +149,18 @@ namespace PdfQualityCompare
             PrintSummary(list, options);
 
             Console.WriteLine();
+            if (diffsDir != null)
+            {
+                int highlighted = 0, failed = 0;
+                foreach (DocResult r in list)
+                {
+                    if (r.HighlightPdfPath != null) highlighted++;
+                    else if (r.HighlightError != null) failed++;
+                }
+                Console.WriteLine("Diffs   : {0} highlighted PDF(s) in {1}", highlighted, diffsDir);
+                if (failed > 0)
+                    Console.WriteLine("          {0} could not be written; their counts are still reported.", failed);
+            }
             Console.WriteLine("Report  : {0}", html);
             Console.WriteLine("CSV     : {0}", csv);
             Console.WriteLine("Details : {0}", json);
@@ -161,7 +201,7 @@ namespace PdfQualityCompare
             return 0;
         }
 
-        private static DocResult CompareOne(Pair pair, Options options)
+        private static DocResult CompareOne(Pair pair, Options options, string diffsDir)
         {
             if (pair.ReferencePdf == null || pair.CandidatePdf == null)
             {
@@ -183,7 +223,7 @@ namespace PdfQualityCompare
             DocResult result = DocumentComparer.Compare(pair.Name, a, b, options);
 
             if (options.Annotations && result.Status == "Compared")
-                TextDiffAnnotations.Measure(result, pair.ReferencePdf, pair.CandidatePdf, options);
+                TextDiffAnnotations.Measure(result, pair.ReferencePdf, pair.CandidatePdf, options, diffsDir);
 
             if (options.Visual && result.Status == "Compared")
                 VisualDiff.Measure(result, pair.ReferencePdf, pair.CandidatePdf, options);
@@ -191,52 +231,51 @@ namespace PdfQualityCompare
             return result;
         }
 
-        private static void WriteDiffPdfs(List<DocResult> ordered, Options options)
+        /// <summary>
+        /// Raises the highest count drawn so far to <paramref name="done"/>, or returns
+        /// false because something newer is already on screen.
+        ///
+        /// Workers finish out of order, and one that was descheduled between counting
+        /// itself and reaching the console would otherwise paint an older figure over a
+        /// newer one - the progress line used to jump back to 5/100 after showing 95/100.
+        /// </summary>
+        private static bool Claim(ref int drawn, int done)
         {
-            string dir = Path.Combine(options.OutputDir, "diffs");
-            int written = 0;
-
-            foreach (DocResult r in ordered)
+            while (true)
             {
-                if (written >= options.DiffPdfWorst) break;
-                if (r.Status != "Compared") continue;
-
-                string safe = SafeFileName(r.Name);
-                string target = Path.Combine(dir, safe + ".diff.pdf");
-                try
-                {
-                    VisualDiff.WriteDiffPdf(r.ReferencePath, r.CandidatePath, target);
-                    r.DiffPdfPath = target;
-                    written++;
-                }
-                catch (Exception ex)
-                {
-                    Console.Error.WriteLine("Diff PDF failed for {0}: {1}", r.Name, ex.Message);
-                }
-
-                try
-                {
-                    r.HighlightPdfPath = TextDiffAnnotations.WriteHighlighted(
-                        r.ReferencePath, r.CandidatePath, dir, safe, options);
-                }
-                catch (Exception ex)
-                {
-                    Console.Error.WriteLine("Highlight PDF failed for {0}: {1}", r.Name, ex.Message);
-                }
+                int current = Volatile.Read(ref drawn);
+                if (done <= current) return false;
+                if (Interlocked.CompareExchange(ref drawn, done, current) == current) return true;
             }
-            if (written > 0) Console.WriteLine("Wrote {0} visual diff PDF(s) to {1}", written, dir);
         }
 
-        private static string SafeFileName(string name)
-        {
-            foreach (char c in Path.GetInvalidFileNameChars()) name = name.Replace(c, '_');
-            return name.Length > 120 ? name.Substring(0, 120) : name;
-        }
-
-        private static void ReportProgress(int done, int total, Stopwatch clock)
+        /// <param name="busy">
+        /// Workers inside a document comparison at this moment. Not the process thread
+        /// count, which also covers idle thread pool threads and the several the Apryse
+        /// SDK runs of its own, and so says nothing about how much work is in flight.
+        /// </param>
+        private static void ReportProgress(int done, int total, int busy, int threads, Stopwatch clock)
         {
             double rate = done / Math.Max(0.001, clock.Elapsed.TotalSeconds);
-            Console.Write("\r  {0}/{1} documents  ({2:0.0}/s)   ", done, total, rate);
+            // Trailing spaces because the line is redrawn in place and can get shorter.
+            Console.Write("\r  {0}/{1} documents  ({2:0.0}/s)  {3} of {4} thread(s) busy    ",
+                          done, total, rate, busy, threads);
+        }
+
+        /// <summary>
+        /// How much of the thread budget the run actually used. Mean occupancy well below
+        /// the thread count means the workers spent their time waiting rather than
+        /// comparing, and that raising --threads will not help.
+        /// </summary>
+        private static void ReportOccupancy(int documents, long busyTicks, int threads, Stopwatch clock)
+        {
+            double wall = clock.Elapsed.TotalSeconds;
+            double working = busyTicks / (double)Stopwatch.Frequency;
+            if (wall <= 0) return;
+
+            Console.WriteLine("  {0} document(s) in {1:0.0}s, {2:0.0}/s; mean {3:0.0} of {4} thread(s) busy ({5:0}%)",
+                              documents, wall, documents / wall, working / wall, threads,
+                              100.0 * working / (wall * threads));
         }
 
         // ------------------------------------------------------------- discovery
@@ -363,22 +402,62 @@ namespace PdfQualityCompare
         private static void PrintSummary(List<DocResult> results, Options options)
         {
             var compared = new List<DocResult>();
+            var fontMatched = new List<DocResult>();
             int failed = 0;
             foreach (DocResult r in results)
             {
-                if (r.Status == "Compared") compared.Add(r); else failed++;
+                if (r.Status != "Compared") { failed++; continue; }
+                compared.Add(r);
+                if (r.FontsMatch) fontMatched.Add(r);
             }
 
             Console.WriteLine("--- summary -------------------------------------------------");
             Console.WriteLine("Compared {0} document(s); {1} could not be compared.", compared.Count, failed);
             if (compared.Count == 0) return;
 
+            PrintAggregate(compared);
+
+            // Substituting a font reflows the text, so a corpus-wide layout figure is partly
+            // a measure of font substitution. Repeating the numbers over documents whose
+            // fonts came through intact isolates the layout engine's own behaviour.
+            Console.WriteLine();
+            Console.WriteLine("--- documents whose fonts came through unchanged -------------");
+            if (fontMatched.Count == 0)
+            {
+                Console.WriteLine("None: every compared document has a font difference.");
+            }
+            else
+            {
+                Console.WriteLine("{0} of {1} document(s) ({2:0.0}%).",
+                    fontMatched.Count, compared.Count, 100.0 * fontMatched.Count / compared.Count);
+                PrintAggregate(fontMatched);
+            }
+
+            Console.WriteLine();
+            Console.WriteLine("Worst documents:");
+            Console.WriteLine("  {0,-46} {1,7} {2,7} {3,7} {4,7} {5,7}", "document", "overall", "text", "layout", "font", "page");
+            int shown = 0;
+            foreach (DocResult r in results)
+            {
+                if (r.Status != "Compared") continue;
+                if (shown++ >= 10) break;
+                Console.WriteLine("  {0,-46} {1,7:0.0} {2,7:0.0} {3,7:0.0} {4,7:0.0} {5,7:0.0}",
+                    Shorten(r.Name, 46), r.OverallScore, r.TextScore, r.LayoutScore, r.FontScore, r.PageScore);
+            }
+        }
+
+        /// <summary>The same figures over whichever set of documents is handed in.</summary>
+        private static void PrintAggregate(List<DocResult> docs)
+        {
             double overall = 0, content = 0, order = 0, misplaced = 0, visual = 0;
             int pageDiff = 0, fontMissing = 0, textLost = 0, orderBad = 0, visualCount = 0;
             long annotations = 0, differences = 0;
             int annotated = 0, annotatedClean = 0;
+            long symbolDiffs = 0;
+            int symbolDocs = 0;
+            var bySymbol = new Dictionary<string, int>(StringComparer.Ordinal);
 
-            foreach (DocResult r in compared)
+            foreach (DocResult r in docs)
             {
                 overall += r.OverallScore;
                 content += r.ContentSimilarity;
@@ -395,10 +474,24 @@ namespace PdfQualityCompare
                     differences += r.TextDiffDifferences;
                     annotated++;
                     if (r.TextDiffAnnotations == 0) annotatedClean++;
+                    if (r.SuppressedSymbolDiffs.Count > 0)
+                    {
+                        symbolDiffs += r.SuppressedSymbolDiffs.Count;
+                        symbolDocs++;
+                        foreach (SymbolEncodingDiff d in r.SuppressedSymbolDiffs)
+                            foreach (SymbolSubstitution s in d.Substitutions)
+                            {
+                                int seen;
+                                bySymbol.TryGetValue(s.Symbol, out seen);
+                                bySymbol[s.Symbol] = seen + 1;
+                            }
+                    }
                 }
             }
 
-            int n = compared.Count;
+            int n = docs.Count;
+            if (n == 0) return;
+
             Console.WriteLine("Mean overall score      : {0:0.0}", overall / n);
             Console.WriteLine("Mean content similarity : {0:0.00}%", 100.0 * content / n);
             Console.WriteLine("Mean reading order sim. : {0:0.00}%", 100.0 * order / n);
@@ -413,21 +506,12 @@ namespace PdfQualityCompare
                     annotations, annotated, differences);
                 Console.WriteLine("Documents with none     : {0} ({1:0.0}%)",
                     annotatedClean, 100.0 * annotatedClean / annotated);
+                if (symbolDiffs > 0)
+                    Console.WriteLine("Encoding-only ignored   : {0} difference(s) over {1} document(s) ({2})",
+                        symbolDiffs, symbolDocs, SymbolEncodingDiffs.Breakdown(bySymbol));
             }
             if (visualCount > 0)
                 Console.WriteLine("Mean pixel difference   : {0:0.00}%", visual / visualCount);
-
-            Console.WriteLine();
-            Console.WriteLine("Worst documents:");
-            Console.WriteLine("  {0,-46} {1,7} {2,7} {3,7} {4,7} {5,7}", "document", "overall", "text", "layout", "font", "page");
-            int shown = 0;
-            foreach (DocResult r in results)
-            {
-                if (r.Status != "Compared") continue;
-                if (shown++ >= 10) break;
-                Console.WriteLine("  {0,-46} {1,7:0.0} {2,7:0.0} {3,7:0.0} {4,7:0.0} {5,7:0.0}",
-                    Shorten(r.Name, 46), r.OverallScore, r.TextScore, r.LayoutScore, r.FontScore, r.PageScore);
-            }
         }
 
         private static string Shorten(string s, int max)
