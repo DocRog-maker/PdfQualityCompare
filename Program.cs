@@ -63,24 +63,74 @@ namespace PdfQualityCompare
         {
             if (!string.IsNullOrEmpty(options.ExplainDocument)) return RunExplain(options);
 
+            bool many = options.Candidates.Count > 1;
+            string label = "{0,-" + LabelWidth(options) + "} {1}";
+
+            Console.WriteLine("Build     : {0}", BuildStamp.Describe());
+            Console.WriteLine("Reference : " + label, options.ReferenceLabel, options.ReferenceRoot);
+            if (many)
+            {
+                Console.WriteLine("Candidates: {0}   threads: {1}{2}{3}", options.Candidates.Count, options.Threads,
+                                  options.Annotations ? "   text diff annotations on" : "",
+                                  options.Visual ? "   raster diff at " + options.VisualDpi + " dpi" : "");
+                foreach (CandidateRun c in options.Candidates)
+                    Console.WriteLine("            " + label, c.Label, c.Root);
+            }
+            else
+            {
+                Console.WriteLine("Candidate : " + label, options.CandidateLabel, options.CandidateRoot);
+            }
+
+            Directory.CreateDirectory(options.OutputDir);
+
+            var outcomes = new List<CandidateOutcome>();
+            for (int i = 0; i < options.Candidates.Count; i++)
+            {
+                CandidateRun c = options.Candidates[i];
+                if (many)
+                {
+                    Console.WriteLine();
+                    Console.WriteLine("=== {0} ({1} of {2}) {3}", c.Label, i + 1, options.Candidates.Count,
+                                      new string('=', Math.Max(3, 56 - c.Label.Length)));
+                }
+                outcomes.Add(CompareCandidate(options.ForCandidate(c), c));
+            }
+
+            int usable = 0;
+            foreach (CandidateOutcome o in outcomes) if (o.Results != null) usable++;
+            if (usable == 0)
+            {
+                Console.Error.WriteLine("Nothing was compared. Expected sub-folders with a '" +
+                                        options.PdfName + "' inside each root.");
+                return 4;
+            }
+
+            if (many) WriteCombinedReports(outcomes, options);
+            return 0;
+        }
+
+        /// <summary>One candidate against the reference, reported into its own output directory.</summary>
+        private static CandidateOutcome CompareCandidate(Options options, CandidateRun candidate)
+        {
+            var outcome = new CandidateOutcome { Run = candidate };
+
             List<string> ignored;
             List<Pair> pairs = Discover(options, out ignored);
             if (pairs.Count == 0)
             {
-                Console.Error.WriteLine("No document folders to compare. Expected sub-folders with a '" +
-                                        options.PdfName + "' inside each root.");
+                outcome.Skipped = "no document folders with a '" + options.PdfName + "' on either side";
+                Console.Error.WriteLine("{0}: nothing to compare - {1}.", candidate.Label, outcome.Skipped);
                 if (ignored.Count > 0)
-                    Console.Error.WriteLine("{0} folder(s) held no PDF on either side: {1}",
+                    Console.Error.WriteLine("  {0} folder(s) held no PDF on either side: {1}",
                                             ignored.Count, Join(ignored, 8));
-                return 4;
+                return outcome;
             }
 
-            Console.WriteLine("Build     : {0}", BuildStamp.Describe());
-            Console.WriteLine("Reference : {0}", options.ReferenceRoot);
-            Console.WriteLine("Candidate : {0}", options.CandidateRoot);
-            Console.WriteLine("Documents : {0}   threads: {1}{2}{3}", pairs.Count, options.Threads,
-                              options.Annotations ? "   text diff annotations on" : "",
-                              options.Visual ? "   raster diff at " + options.VisualDpi + " dpi" : "");
+            Console.WriteLine("Documents : {0}{1}", pairs.Count,
+                              options.Candidates.Count > 1 ? "" :
+                              "   threads: " + options.Threads +
+                              (options.Annotations ? "   text diff annotations on" : "") +
+                              (options.Visual ? "   raster diff at " + options.VisualDpi + " dpi" : ""));
             if (ignored.Count > 0)
                 Console.WriteLine("Ignored   : {0} folder(s) with no PDF on either side ({1})",
                                   ignored.Count, Join(ignored, 5));
@@ -165,14 +215,94 @@ namespace PdfQualityCompare
             Console.WriteLine("Report  : {0}", html);
             Console.WriteLine("CSV     : {0}", csv);
             Console.WriteLine("Details : {0}", json);
-            return 0;
+
+            outcome.Results = list;
+            outcome.ReportPath = html;
+            return outcome;
+        }
+
+        // ------------------------------------------------- across the candidates
+
+        /// <summary>
+        /// The index over every candidate, written only when there is more than one - with a
+        /// single candidate its own report already says everything there is to say.
+        /// </summary>
+        private static void WriteCombinedReports(List<CandidateOutcome> outcomes, Options options)
+        {
+            string index = Path.Combine(options.OutputDir, "index.html");
+            string csv = Path.Combine(options.OutputDir, "summary-all.csv");
+
+            CandidateIndex.WriteHtml(outcomes, options, index);
+            ReportWriter.WriteCombinedCsv(outcomes, csv);
+
+            Console.WriteLine();
+            PrintCandidateTable(outcomes, options);
+            Console.WriteLine();
+            Console.WriteLine("Index   : {0}", index);
+            Console.WriteLine("CSV     : {0}", csv);
+        }
+
+        /// <summary>The headline figure for each candidate, side by side, best first.</summary>
+        private static void PrintCandidateTable(List<CandidateOutcome> outcomes, Options options)
+        {
+            Console.WriteLine("--- candidates against {0} {1}", options.ReferenceLabel,
+                              new string('-', Math.Max(3, 37 - options.ReferenceLabel.Length)));
+            Console.WriteLine("  {0,-20} {1,6} {2,8} {3,7} {4,7} {5,7} {6,7} {7,9} {8,8}",
+                              "candidate", "docs", "overall", "text", "layout", "font", "page", "fonts ok", "failed");
+
+            var ranked = new List<CandidateOutcome>(outcomes);
+            ranked.Sort((a, b) => Aggregate.For(b).Overall.CompareTo(Aggregate.For(a).Overall));
+
+            foreach (CandidateOutcome o in ranked)
+            {
+                Aggregate a = Aggregate.For(o);
+                string name = Shorten(o.Run.Label, 20);
+
+                // Nothing to average over is not a score of zero, so the row says what
+                // happened instead of printing figures that would be read as measurements.
+                if (a.Compared == 0)
+                {
+                    Console.WriteLine("  {0,-20} {1}", name, o.Skipped ??
+                                      "none of " + a.Failed + " document(s) could be compared");
+                    continue;
+                }
+                Console.WriteLine("  {0,-20} {1,6} {2,8:0.0} {3,7:0.0} {4,7:0.0} {5,7:0.0} {6,7:0.0} {7,8:0.0}% {8,8}",
+                                  name, a.Compared, a.Overall, a.Text, a.Layout, a.Font, a.Page,
+                                  a.FontsMatchPct, a.Failed);
+            }
+        }
+
+        /// <summary>
+        /// Wide enough for the longest run name, so the roots beside them line up. Capped,
+        /// because one long label should not push every path off the right of the console.
+        /// </summary>
+        private static int LabelWidth(Options options)
+        {
+            int width = options.ReferenceLabel.Length;
+            foreach (CandidateRun c in options.Candidates) width = Math.Max(width, c.Label.Length);
+            return Math.Min(width, 28);
         }
 
         private static int Rank(DocResult r) { return r.Status == "Compared" ? 1 : 0; }
 
         private static int RunExplain(Options options)
         {
-            var saved = options.Filter;
+            int failures = 0;
+            foreach (CandidateRun c in options.Candidates)
+            {
+                if (options.Candidates.Count > 1)
+                {
+                    Console.WriteLine("=== {0} {1}", c.Label, new string('=', Math.Max(3, 56 - c.Label.Length)));
+                }
+                if (ExplainOne(options.ForCandidate(c)) != 0) failures++;
+                Console.WriteLine();
+            }
+            return failures == options.Candidates.Count ? 4 : 0;
+        }
+
+        private static int ExplainOne(Options options)
+        {
+            string saved = options.Filter;
             options.Filter = options.ExplainDocument;
             List<string> ignored;
             List<Pair> matches = Discover(options, out ignored);

@@ -1,13 +1,37 @@
 using System;
+using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using System.Text;
 
 namespace PdfQualityCompare
 {
-    /// <summary>Command line configuration for a comparison run.</summary>
+    /// <summary>
+    /// One candidate run: a root of converted output, the name it is reported under, and
+    /// the directory its own report is written to. Several of these are compared against
+    /// the one reference in a single invocation.
+    /// </summary>
+    internal sealed class CandidateRun
+    {
+        public string Root;
+        public string Label;
+        public string OutputDir;
+    }
+
+    /// <summary>
+    /// Command line configuration. <see cref="Candidates"/> holds every candidate the run
+    /// was asked for; the <c>Candidate*</c> and <see cref="OutputDir"/> fields describe the
+    /// single comparison an instance stands for, which is what the comparison and report
+    /// code works with. <see cref="ForCandidate"/> produces one such instance per candidate.
+    /// </summary>
     internal sealed class Options
     {
         public string ReferenceRoot;
+
+        /// <summary>Every candidate root the command line named, in the order given.</summary>
+        public readonly List<CandidateRun> Candidates = new List<CandidateRun>();
+
+        /// <summary>The candidate this instance describes - one of <see cref="Candidates"/>.</summary>
         public string CandidateRoot;
         public string OutputDir;
 
@@ -54,24 +78,34 @@ namespace PdfQualityCompare
         public double WeightFont = 0.25;
         public double WeightPage = 0.20;
 
-        public string ReferenceLabel = "reference";
-        public string CandidateLabel = "candidate";
+        /// <summary>Defaults to the reference root's own folder name.</summary>
+        public string ReferenceLabel;
+
+        /// <summary>Label of the candidate this instance describes.</summary>
+        public string CandidateLabel;
 
         public const string Usage =
-@"PdfQualityCompare - compare the quality of two PDF conversion runs (Apryse SDK).
+@"PdfQualityCompare - compare the quality of PDF conversion runs (Apryse SDK).
 
-Both roots are expected to hold one sub-folder per source document, with the same
-folder names on each side, each containing the converted PDF (default 'pdf.pdf').
+Every root is expected to hold one sub-folder per source document, with the same
+folder names in each root, each containing the converted PDF (default 'pdf.pdf').
+
+--candidate may be given more than once. Each candidate is compared against the one
+reference and gets its own report; a combined index across all of them is written
+alongside. Each run is named after its root folder - a reference under
+C:\benchmark\office and candidates under C:\benchmark\apryse and C:\benchmark\libreoffice
+are reported as 'office', 'apryse' and 'libreoffice'.
 
 Usage:
-  PdfQualityCompare --reference <dir> --candidate <dir> [options]
+  PdfQualityCompare --reference <dir> --candidate <dir> [--candidate <dir> ...] [options]
 
 Required:
   --reference, -r <dir>   Root of the run treated as ground truth (e.g. the MS Office output).
-  --candidate, -c <dir>   Root of the run being assessed (e.g. the Apryse output).
+  --candidate, -c <dir>   Root of a run being assessed (e.g. the Apryse output). Repeatable.
 
 Options:
   --out, -o <dir>         Report output directory (default: .\pdf-quality-report).
+                          With several candidates each gets a sub-folder named after it.
   --pdf-name <name>       PDF file name inside each document folder (default: pdf.pdf).
   --filter <text>         Only compare folders whose name contains <text>.
   --limit <n>             Compare at most n documents.
@@ -88,20 +122,31 @@ Options:
   --max-hunks <n>         Text difference hunks kept per document (default: 40).
   --weights t,l,f,p       Overall score weights for text, layout, font, page (default 0.30,0.25,0.25,0.20).
   --explain <folder>      Diagnose one document (name or unique prefix) and print why it scored as it did.
-  --ref-label <text>      Column label for the reference run (default: reference).
-  --cand-label <text>     Column label for the candidate run (default: candidate).
+  --ref-label <text>      Name for the reference run (default: its root folder name).
+  --cand-label <text>     Name for the candidate it follows on the command line
+                          (default: that candidate's root folder name).
   --license <key>         Apryse license key (else APRYSE_LICENSE_KEY, else built-in key).
   --help, -h              Show this help.
 
-Example:
+Examples:
   PdfQualityCompare -r C:\benchmark-qualitron\office ^
                     -c C:\benchmark-qualitron\apryse-20260914\Generic ^
-                    -o C:\benchmark-qualitron\quality-report --visual";
+                    -o C:\benchmark-qualitron\quality-report --visual
+
+  PdfQualityCompare -r C:\benchmark-DOCXCORP\office ^
+                    -c C:\benchmark-DOCXCORP\apryse ^
+                    -c C:\benchmark-DOCXCORP\libreoffice ^
+                    -o C:\benchmark-DOCXCORP\quality-report";
 
         public static Options Parse(string[] args, out string error)
         {
             error = null;
             var o = new Options();
+
+            // A --cand-label names the candidate it follows. Written the other way round it
+            // has nothing to attach to yet, so it waits for the next one rather than being
+            // dropped - the argument order used to make no difference and still should not.
+            string pendingLabel = null;
 
             for (int i = 0; i < args.Length; i++)
             {
@@ -119,7 +164,15 @@ Example:
                         o.ReferenceRoot = Next(args, ref i, ref error); break;
                     case "--candidate":
                     case "-c":
-                        o.CandidateRoot = Next(args, ref i, ref error); break;
+                    {
+                        string dir = Next(args, ref i, ref error);
+                        if (dir != null)
+                        {
+                            o.Candidates.Add(new CandidateRun { Root = dir, Label = pendingLabel });
+                            pendingLabel = null;
+                        }
+                        break;
+                    }
                     case "--out":
                     case "-o":
                         o.OutputDir = Next(args, ref i, ref error); break;
@@ -152,7 +205,13 @@ Example:
                     case "--ref-label":
                         o.ReferenceLabel = Next(args, ref i, ref error); break;
                     case "--cand-label":
-                        o.CandidateLabel = Next(args, ref i, ref error); break;
+                    {
+                        string label = Next(args, ref i, ref error);
+                        if (label == null) break;
+                        if (o.Candidates.Count > 0) o.Candidates[o.Candidates.Count - 1].Label = label;
+                        else pendingLabel = label;
+                        break;
+                    }
                     case "--license":
                         o.License = Next(args, ref i, ref error); break;
                     case "--explain":
@@ -167,23 +226,119 @@ Example:
                 if (error != null) return null;
             }
 
-            if (string.IsNullOrEmpty(o.ReferenceRoot) || string.IsNullOrEmpty(o.CandidateRoot))
+            if (string.IsNullOrEmpty(o.ReferenceRoot) || o.Candidates.Count == 0)
             {
-                error = "Both --reference and --candidate are required.";
+                error = "Both --reference and at least one --candidate are required.";
+                return null;
+            }
+            if (pendingLabel != null)
+            {
+                error = "--cand-label " + pendingLabel + " names no candidate.";
                 return null;
             }
 
             o.ReferenceRoot = Path.GetFullPath(o.ReferenceRoot);
-            o.CandidateRoot = Path.GetFullPath(o.CandidateRoot);
-
             if (!Directory.Exists(o.ReferenceRoot)) { error = "Reference root not found: " + o.ReferenceRoot; return null; }
-            if (!Directory.Exists(o.CandidateRoot)) { error = "Candidate root not found: " + o.CandidateRoot; return null; }
+            if (string.IsNullOrEmpty(o.ReferenceLabel)) o.ReferenceLabel = LeafName(o.ReferenceRoot, "reference");
+
+            foreach (CandidateRun c in o.Candidates)
+            {
+                c.Root = Path.GetFullPath(c.Root);
+                if (!Directory.Exists(c.Root)) { error = "Candidate root not found: " + c.Root; return null; }
+                if (string.IsNullOrEmpty(c.Label)) c.Label = LeafName(c.Root, "candidate");
+            }
+            MakeLabelsUnique(o.Candidates);
 
             if (string.IsNullOrEmpty(o.OutputDir))
                 o.OutputDir = Path.Combine(Environment.CurrentDirectory, "pdf-quality-report");
             o.OutputDir = Path.GetFullPath(o.OutputDir);
 
+            // One candidate writes report.html, summary.csv and diffs\ straight into --out,
+            // as it always has. Several would collide there, so each takes a sub-folder and
+            // --out keeps only the index across them.
+            foreach (CandidateRun c in o.Candidates)
+                c.OutputDir = o.Candidates.Count == 1
+                    ? o.OutputDir
+                    : Path.Combine(o.OutputDir, FolderSafe(c.Label));
+
+            // The first candidate, so an Options that was never narrowed to one still
+            // describes a valid comparison.
+            o.CandidateRoot = o.Candidates[0].Root;
+            o.CandidateLabel = o.Candidates[0].Label;
+
             return o;
+        }
+
+        /// <summary>This configuration narrowed to the single comparison against <paramref name="c"/>.</summary>
+        public Options ForCandidate(CandidateRun c)
+        {
+            var o = (Options)MemberwiseClone();
+            o.CandidateRoot = c.Root;
+            o.CandidateLabel = c.Label;
+            o.OutputDir = c.OutputDir;
+            return o;
+        }
+
+        /// <summary>
+        /// The folder's own name, which is what a run is called when nothing else names it.
+        /// Falls back for a drive root, which has no name of its own to use.
+        /// </summary>
+        private static string LeafName(string fullPath, string fallback)
+        {
+            try
+            {
+                string name = new DirectoryInfo(fullPath).Name.Trim();
+                // "C:\" comes back as itself; anything holding a colon is a volume, not a name.
+                if (name.Length == 0 || name.IndexOf(':') >= 0) return fallback;
+                return name;
+            }
+            catch (Exception)
+            {
+                return fallback;
+            }
+        }
+
+        /// <summary>
+        /// Labels name output folders and report columns, so two candidates cannot share one.
+        /// Benchmark trees regularly end in the same leaf name under different parents -
+        /// apryse-20260914\Generic beside libreoffice\Generic - so a clash is resolved by
+        /// bringing the parent folder into the name before falling back to a number.
+        /// </summary>
+        private static void MakeLabelsUnique(List<CandidateRun> candidates)
+        {
+            var counts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            foreach (CandidateRun c in candidates)
+            {
+                int seen;
+                counts.TryGetValue(c.Label, out seen);
+                counts[c.Label] = seen + 1;
+            }
+
+            var taken = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (CandidateRun c in candidates)
+            {
+                if (counts[c.Label] > 1)
+                {
+                    string parent = LeafName(Path.GetDirectoryName(c.Root) ?? "", null);
+                    if (!string.IsNullOrEmpty(parent)) c.Label = parent + "-" + c.Label;
+                }
+
+                string label = c.Label;
+                for (int n = 2; !taken.Add(label); n++) label = c.Label + "-" + n;
+                c.Label = label;
+            }
+        }
+
+        /// <summary>The label with anything a directory name cannot hold replaced.</summary>
+        public static string FolderSafe(string label)
+        {
+            var sb = new StringBuilder(label.Length);
+            char[] invalid = Path.GetInvalidFileNameChars();
+            foreach (char ch in label)
+                sb.Append(Array.IndexOf(invalid, ch) >= 0 ? '_' : ch);
+            // A trailing dot or space is legal in the string and not in a directory name.
+            string safe = sb.ToString().TrimEnd('.', ' ');
+            return safe.Length > 0 ? safe : "candidate";
         }
 
         private static void ParseWeights(string text, Options o, ref string error)

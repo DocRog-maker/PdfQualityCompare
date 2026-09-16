@@ -315,4 +315,87 @@ namespace PdfQualityCompare
         public double LayoutScore;
         public double OverallScore;
     }
+
+    /// <summary>Everything one candidate's comparison against the reference produced.</summary>
+    internal sealed class CandidateOutcome
+    {
+        public CandidateRun Run;
+
+        /// <summary>Worst first, as the candidate's own report lists them. Null when nothing was compared.</summary>
+        public List<DocResult> Results;
+
+        /// <summary>Why there was nothing to compare, when <see cref="Results"/> is null.</summary>
+        public string Skipped;
+
+        /// <summary>This candidate's own report.html.</summary>
+        public string ReportPath;
+
+        /// <summary>Worked out on demand by <see cref="Aggregate.For"/>, which caches it here.</summary>
+        public Aggregate Summary;
+    }
+
+    /// <summary>
+    /// One candidate's figures reduced to the numbers that place it against the others.
+    /// The means are over the documents that were compared; a document that could not be
+    /// compared has no scores to average and is counted in <see cref="Failed"/> instead.
+    /// </summary>
+    internal sealed class Aggregate
+    {
+        public int Compared;
+        public int Failed;
+        /// <summary>Negative when there is nothing to report, so an empty candidate sorts last.</summary>
+        public double Overall = -1;
+        public double Text;
+        public double Layout;
+        public double Font;
+        public double Page;
+        public double ContentSimilarity;
+        public double ReadingOrder;
+        public double MisplacedPct;
+        public double FontsMatchPct;
+        public long Marks;
+        /// <summary>NaN when the raster comparison was not run.</summary>
+        public double VisualDiffPct = double.NaN;
+
+        public static Aggregate For(CandidateOutcome outcome)
+        {
+            if (outcome.Summary == null) outcome.Summary = Compute(outcome.Results);
+            return outcome.Summary;
+        }
+
+        private static Aggregate Compute(List<DocResult> results)
+        {
+            var a = new Aggregate();
+            if (results == null) return a;
+
+            int fontsOk = 0, visualCount = 0;
+            double visual = 0;
+            foreach (DocResult r in results)
+            {
+                if (r.Status != "Compared") { a.Failed++; continue; }
+                a.Compared++;
+                a.Text += r.TextScore;
+                a.Layout += r.LayoutScore;
+                a.Font += r.FontScore;
+                a.Page += r.PageScore;
+                a.ContentSimilarity += r.ContentSimilarity;
+                a.ReadingOrder += r.ReadingOrderSimilarity;
+                a.MisplacedPct += r.MisplacedPct;
+                if (r.FontsMatch) fontsOk++;
+                if (r.TextDiffRun) a.Marks += r.TextDiffAnnotations;
+                if (r.VisualRun && !double.IsNaN(r.VisualDiffPct)) { visual += r.VisualDiffPct; visualCount++; }
+
+                // Summed here and divided below, so Overall stays negative on an empty set.
+                a.Overall = (a.Overall < 0 ? 0 : a.Overall) + r.OverallScore;
+            }
+
+            if (a.Compared == 0) return a;
+            int n = a.Compared;
+            a.Overall /= n; a.Text /= n; a.Layout /= n; a.Font /= n; a.Page /= n;
+            a.ContentSimilarity /= n; a.ReadingOrder /= n; a.MisplacedPct /= n;
+            a.FontsMatchPct = 100.0 * fontsOk / n;
+            if (visualCount > 0) a.VisualDiffPct = visual / visualCount;
+            return a;
+        }
+    }
 }

@@ -1,7 +1,7 @@
 # PdfQualityCompare
 
-Compares two runs of PDF conversion output and reports where they differ, using the
-Apryse (PDFTron) SDK. Built for benchmark trees of the shape
+Compares one or more runs of PDF conversion output against a reference run and reports
+where they differ, using the Apryse (PDFTron) SDK. Built for benchmark trees of the shape
 
 ```
 <root>/
@@ -11,8 +11,8 @@ Apryse (PDFTron) SDK. Built for benchmark trees of the shape
     pdf.pdf
 ```
 
-where the same document folder names appear under both roots — one root being the
-output you trust (for example the MS Office conversion), the other the output you are
+where the same document folder names appear under every root — one root being the
+output you trust (for example the MS Office conversion), the others the output you are
 assessing.
 
 A folder that holds no PDF on either side is not a document, so bookkeeping folders that
@@ -24,7 +24,7 @@ a conversion that produced nothing.
 ## Running it
 
 ```bash
-PdfQualityCompare.exe -r C:\benchmark-qualitron\office -c C:\benchmark-qualitron\apryse-20260914\Generic -o C:\reports\apryse-20260914 --ref-label office --cand-label apryse
+PdfQualityCompare.exe -r C:\benchmark-qualitron\office -c C:\benchmark-qualitron\apryse-20260914\Generic -o C:\reports\apryse-20260914
 ```
 
 Add `--visual` to also rasterise and compare pixels (roughly 4x slower, and the most
@@ -44,9 +44,46 @@ highlighted copy of each side.
 | `--no-annotations` | Skip the Apryse `HighlightTextDiff` pass (it costs about 5s per 100 documents). |
 | `--highlight-moves` | Let that pass mark moved text too, which counts moves as differences. |
 
+## Several candidates at once
+
+`--candidate` may be given more than once. Each candidate is compared against the same
+reference and gets its own full report, and an index across all of them is written
+alongside:
+
+```bash
+PdfQualityCompare.exe -r C:\benchmark-DOCXCORP\office ^
+                      -c C:\benchmark-DOCXCORP\apryse ^
+                      -c C:\benchmark-DOCXCORP\libreoffice ^
+                      -o C:\benchmark-DOCXCORP\quality-report
+```
+
+Every run is named after its own root folder — `office`, `apryse`, `libreoffice` above —
+and that name is what the reports, the output sub-folders and the `candidate` column of
+the combined CSV use. `--ref-label` and `--cand-label` override it where the folder name
+is not the name you want to read; `--cand-label` applies to the `--candidate` it follows,
+so each one can be named in turn:
+
+```bash
+-c C:\out\apryse-20260914\Generic --cand-label apryse -c C:\out\libreoffice\Generic --cand-label libre
+```
+
+Two candidate roots ending in the same folder name — `apryse-20260914\Generic` beside
+`libreoffice\Generic` — would otherwise share a name and an output folder, so the parent
+folder is brought into the name to tell them apart: `apryse-20260914-Generic` and
+`libreoffice-Generic`.
+
+Candidates need not cover the same corpus. Every document any candidate produced a
+result for gets a row in the index, and a candidate whose root has no folder of that name
+shows `absent` there — which is not the same finding as a conversion that ran and
+produced nothing, and is not shown as one.
+
+The candidates run one after another rather than side by side, so `--threads` keeps
+meaning what it did and the progress line stays readable. Each one re-reads the reference
+PDFs, so a run over *n* candidates does the reference extraction *n* times.
+
 ## Output
 
-Written to the `--out` directory:
+With a single candidate, written to the `--out` directory:
 
 - **`report.html`** — the one to open. Sortable, filterable, one row per document, click
   a row for fonts, measurements and the largest text differences.
@@ -56,6 +93,18 @@ Written to the `--out` directory:
   comparison marked up, so the highlights behind a mark count can actually be read. A
   document with no highlights gets no file, because the copy would be the candidate
   unchanged. `--no-annotations` skips the pass and the folder is not created.
+
+With several candidates those four move into a sub-folder per candidate, named after it,
+and `--out` itself holds the comparison between them:
+
+- **`index.html`** — the one to open. Each candidate's aggregate figures side by side,
+  then one row per document and one column per candidate, with the best cell in each row
+  highlighted. Pick which metric the matrix shows, sort by any candidate's column or by
+  the spread between them, and click a row for every measurement side by side. Each
+  candidate's own report is one click away, and links back.
+- **`summary-all.csv`** — every candidate's rows in one file, with a leading `candidate`
+  column, so the runs can be pivoted against each other without stitching the per-run
+  files together first. Otherwise identical to the per-candidate `summary.csv`.
 
 Every one of them carries the commit the tool was built from, so a figure can be traced
 back to the code that worked it out and two reports that disagree can be told apart by

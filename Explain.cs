@@ -14,15 +14,15 @@ namespace PdfQualityCompare
         public static void Dump(string name, string referencePdf, string candidatePdf, Options options)
         {
             Console.WriteLine("Document  : {0}", name);
-            Console.WriteLine("Reference : {0}", referencePdf);
-            Console.WriteLine("Candidate : {0}", candidatePdf);
+            Console.WriteLine("Reference : {0,-14} {1}", options.ReferenceLabel, referencePdf);
+            Console.WriteLine("Candidate : {0,-14} {1}", options.CandidateLabel, candidatePdf);
             Console.WriteLine();
 
             DocFeatures a = PdfFeatureExtractor.Extract(referencePdf, options);
             DocFeatures b = PdfFeatureExtractor.Extract(candidatePdf, options);
 
-            if (!a.Ok) { Console.WriteLine("Reference could not be read: " + a.Error); return; }
-            if (!b.Ok) { Console.WriteLine("Candidate could not be read: " + b.Error); return; }
+            if (!a.Ok) { Console.WriteLine(options.ReferenceLabel + " could not be read: " + a.Error); return; }
+            if (!b.Ok) { Console.WriteLine(options.CandidateLabel + " could not be read: " + b.Error); return; }
 
             PageAligner.Alignment pages = PageAligner.Align(a, b);
             DocResult r = DocumentComparer.Compare(name, a, b, options);

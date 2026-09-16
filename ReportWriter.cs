@@ -15,11 +15,39 @@ namespace PdfQualityCompare
         public static void WriteCsv(List<DocResult> results, string path)
         {
             var sb = new StringBuilder();
-            sb.AppendLine(string.Join(",", new[]
+            sb.AppendLine(CsvHeader(false));
+            foreach (DocResult r in results) sb.AppendLine(CsvRow(r, null));
+            File.WriteAllText(path, sb.ToString(), new UTF8Encoding(true));
+        }
+
+        /// <summary>
+        /// Every candidate's rows in one file, with a candidate column to tell them apart, so
+        /// the runs can be pivoted against each other without stitching the per-run files
+        /// together first. Otherwise identical to each candidate's own summary.csv.
+        /// </summary>
+        public static void WriteCombinedCsv(List<CandidateOutcome> outcomes, string path)
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine(CsvHeader(true));
+            foreach (CandidateOutcome o in outcomes)
+            {
+                if (o.Results == null) continue;
+                foreach (DocResult r in o.Results) sb.AppendLine(CsvRow(r, o.Run.Label));
+            }
+            File.WriteAllText(path, sb.ToString(), new UTF8Encoding(true));
+        }
+
+        private static string CsvHeader(bool withCandidate)
+        {
+            var columns = new List<string>
             {
                 // Constant down the file, so a CSV that has been merged with another run's
                 // still says which build worked each row out.
-                "build_commit",
+                "build_commit"
+            };
+            if (withCandidate) columns.Add("candidate");
+            columns.AddRange(new[]
+            {
                 "document","status","overall","text_score","layout_score","font_score","page_score",
                 "ref_pages","cand_pages","page_delta","pages_matched","pages_only_in_ref","pages_only_in_cand",
                 "page_size_mismatches","rotation_mismatches",
@@ -35,13 +63,17 @@ namespace PdfQualityCompare
                 "encoding_diffs_ignored","encoding_annotations_ignored","encoding_diffs_detail",
                 "moved_text_pairs","moved_text_chars","moved_text_cancelled","moved_text_annotations_removed",
                 "visual_diff_pct","worst_page_diff_pct","worst_page","error"
-            }));
+            });
+            return string.Join(",", columns.ToArray());
+        }
 
-            foreach (DocResult r in results)
-            {
-                sb.AppendLine(string.Join(",", new[]
+        /// <param name="candidate">The run the row belongs to, or null in a single-run file.</param>
+        private static string CsvRow(DocResult r, string candidate)
+        {
+            var cells = new List<string> { Q(BuildStamp.Commit) };
+            if (candidate != null) cells.Add(Q(candidate));
+            cells.AddRange(new[]
                 {
-                    Q(BuildStamp.Commit),
                     Q(r.Name), Q(r.Status), N(r.OverallScore), N(r.TextScore), N(r.LayoutScore), N(r.FontScore), N(r.PageScore),
                     I(r.ReferencePages), I(r.CandidatePages), I(r.PageDelta),
                     I(r.PagesMatched), I(r.PagesOnlyInReference), I(r.PagesOnlyInCandidate),
@@ -65,10 +97,8 @@ namespace PdfQualityCompare
                     I(r.MovedText.Count), I(MovedChars(r.MovedText)),
                     I(r.MovedTextRemoved), I(r.MovedTextAnnotations),
                     N(r.VisualDiffPct, 3), N(r.WorstPageDiffPct, 3), I(r.WorstPageIndex), Q(r.Error)
-                }));
-            }
-
-            File.WriteAllText(path, sb.ToString(), new UTF8Encoding(true));
+                });
+            return string.Join(",", cells.ToArray());
         }
 
         /// <summary>"bullet U+00B7/U+F0B7; tick U+2713/U+F0FC" - what was ignored and why.</summary>
@@ -143,6 +173,9 @@ namespace PdfQualityCompare
             sb.Append(",\"candidateRoot\":").Append(Js(options.CandidateRoot));
             sb.Append(",\"referenceLabel\":").Append(Js(options.ReferenceLabel));
             sb.Append(",\"candidateLabel\":").Append(Js(options.CandidateLabel));
+            // Present only when this report is one of several, and then it is the way back
+            // to the index that holds the rest.
+            sb.Append(",\"indexHref\":").Append(options.Candidates.Count > 1 ? Js("../index.html") : "null");
             sb.Append(",\"pdfName\":").Append(Js(options.PdfName));
             sb.Append(",\"layoutTolerance\":").Append(Jn(options.LayoutTolerance));
             sb.Append(",\"visual\":").Append(options.Visual ? "true" : "false");
@@ -313,13 +346,13 @@ namespace PdfQualityCompare
             sb.Append(']');
         }
 
-        private static string Jn(double v, int digits = 3)
+        public static string Jn(double v, int digits = 3)
         {
             if (double.IsNaN(v) || double.IsInfinity(v)) return "null";
             return Math.Round(v, digits).ToString(Inv);
         }
 
-        private static string Js(string s)
+        public static string Js(string s)
         {
             if (s == null) return "null";
             var sb = new StringBuilder(s.Length + 2);
@@ -382,6 +415,7 @@ namespace PdfQualityCompare
 body{margin:0;padding:24px;background:var(--bg);color:var(--fg);
      font:14px/1.5 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif}
 h1{font-size:20px;margin:0 0 4px}
+a{color:var(--accent)}
 .sub{color:var(--muted);font-size:13px;margin-bottom:20px}
 .sub code{background:var(--panel);padding:1px 5px;border-radius:4px}
 .cards{display:flex;flex-wrap:wrap;gap:12px;margin-bottom:20px}
@@ -428,7 +462,7 @@ tbody tr:hover{background:var(--panel)}
 </style>
 </head>
 <body>
-<h1>PDF conversion quality report</h1>
+<h1 id=""title"">PDF conversion quality report</h1>
 <div class=""sub"" id=""sub""></div>
 <div class=""cards"" id=""cards""></div>
 <div id=""subset"" hidden>
@@ -479,8 +513,13 @@ const fmt = (v, d = 1) => (v === null || v === undefined) ? '–' : Number(v).to
 const cls = s => s >= 97 ? 'g' : (s >= 85 ? 'w' : 'b');
 const esc = s => (s ?? '').replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
 
+document.getElementById('title').textContent =
+  DATA.candidateLabel + ' vs ' + DATA.referenceLabel + ' — PDF conversion quality';
+
 document.getElementById('sub').innerHTML =
-  'Reference <code>' + esc(DATA.referenceRoot) + '</code> vs candidate <code>' + esc(DATA.candidateRoot) +
+  (DATA.indexHref ? '<a href=""' + esc(DATA.indexHref) + '"">&larr; all candidates</a> &middot; ' : '') +
+  esc(DATA.referenceLabel) + ' <code>' + esc(DATA.referenceRoot) + '</code> vs ' +
+  esc(DATA.candidateLabel) + ' <code>' + esc(DATA.candidateRoot) +
   '</code> &middot; ' + docs.length + ' documents &middot; ' + esc(DATA.generated) +
   ' &middot; layout tolerance ' + DATA.layoutTolerance + 'pt' +
   ' &middot; build <code>' + esc(DATA.buildCommit) + '</code>' +
