@@ -147,6 +147,33 @@ namespace PdfQualityCompare
         public int Annotations;
     }
 
+    /// <summary>
+    /// The same text reported struck out of one document and inserted into the other, under
+    /// two different TextDiffIDs, when nothing was actually lost. Recorded, not suppressed.
+    /// </summary>
+    internal sealed class MovedTextDiff
+    {
+        /// <summary>TextDiffID of the deletion on the reference.</summary>
+        public string ReferenceId;
+        /// <summary>TextDiffID of the matching insertion on the candidate.</summary>
+        public string CandidateId;
+        public int ReferencePage;
+        public int CandidatePage;
+        /// <summary>Length of the shared text, as a measure of how much the pair claims.</summary>
+        public int Characters;
+        public string Text;
+        /// <summary>
+        /// The two highlights cover much the same part of the same page, so the text did
+        /// not move - only the order the comparison read it in did.
+        /// </summary>
+        public bool SamePlace;
+        /// <summary>
+        /// Both halves were struck off both documents, which happens for the same-place
+        /// pairs only. A pair that really did move is reported but kept.
+        /// </summary>
+        public bool Removed;
+    }
+
     /// <summary>The comparison of one document pair.</summary>
     internal sealed class DocResult
     {
@@ -255,6 +282,16 @@ namespace PdfQualityCompare
         public List<SymbolEncodingDiff> SuppressedSymbolDiffs = new List<SymbolEncodingDiff>();
         /// <summary>Highlight annotations those differences accounted for, across both sides.</summary>
         public int SuppressedSymbolAnnotations;
+        /// <summary>
+        /// Deletion/insertion pairs carrying identical text, which cancel each other out.
+        /// Those at the same place on the page were struck off and are excluded from the
+        /// counts above; the rest are reported but kept, being text that really did move.
+        /// </summary>
+        public List<MovedTextDiff> MovedText = new List<MovedTextDiff>();
+        /// <summary>Pairs cancelled, each of which took two TextDiffIDs off both documents.</summary>
+        public int MovedTextRemoved;
+        /// <summary>Highlight annotations that cost, across both sides.</summary>
+        public int MovedTextAnnotations;
         /// <summary>The saved candidate carrying the highlights, when there were any.</summary>
         public string HighlightPdfPath;
         /// <summary>Why the highlighted copy could not be written. The counts are still valid.</summary>

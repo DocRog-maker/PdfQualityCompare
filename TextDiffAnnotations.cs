@@ -44,8 +44,6 @@ namespace PdfQualityCompare
                     a.InitSecurityHandler();
                     b.InitSecurityHandler();
 
-                    int beforeA = CountAnnotations(a), beforeB = CountAnnotations(b);
-
                     int differences = PDFDoc.HighlightTextDiff(a, b, BuildOptions(options));
 
                     // Before anything is counted: a symbol that changed encoding but not
@@ -57,9 +55,24 @@ namespace PdfQualityCompare
                     if (symbols.Error != null && string.IsNullOrEmpty(result.HighlightError))
                         result.HighlightError = "symbol encoding suppression: " + symbols.Error;
 
-                    result.TextDiffDifferences = Math.Max(0, differences - symbols.Diffs.Count);
-                    result.ReferenceDiffAnnotations = Math.Max(0, CountAnnotations(a) - beforeA);
-                    result.CandidateDiffAnnotations = Math.Max(0, CountAnnotations(b) - beforeB);
+                    // Then the text reported as deleted here and inserted there. Only the
+                    // pairs that never moved on the page are cancelled; the rest are
+                    // reported and kept. Runs after the symbols, so what it reads back is
+                    // what is left on the documents.
+                    MovedTextDiffs.Outcome moved = MovedTextDiffs.Cancel(a, b);
+                    result.MovedText = moved.Pairs;
+                    result.MovedTextRemoved = moved.Removed;
+                    result.MovedTextAnnotations = moved.Annotations;
+                    if (moved.Error != null && string.IsNullOrEmpty(result.HighlightError))
+                        result.HighlightError = "moved text cancellation: " + moved.Error;
+
+                    result.TextDiffDifferences =
+                        Math.Max(0, differences - symbols.Diffs.Count - moved.Differences);
+                    // The comparison's own highlights, counted by finding them: it clears
+                    // the annotations a document arrived with, so measuring the growth in
+                    // the annotation total undercounts every document that had any.
+                    result.ReferenceDiffAnnotations = DiffHighlights.Count(a);
+                    result.CandidateDiffAnnotations = DiffHighlights.Count(b);
                     result.TextDiffAnnotations = result.ReferenceDiffAnnotations + result.CandidateDiffAnnotations;
                     result.TextDiffRun = true;
 
@@ -70,7 +83,8 @@ namespace PdfQualityCompare
                     // Suppressed symbols are worth a log of their own even when nothing is
                     // left highlighted: that is the run where the count went to zero, and
                     // the reason for it should be on record.
-                    if (diffsDirectory != null && (result.TextDiffAnnotations > 0 || symbols.Diffs.Count > 0))
+                    if (diffsDirectory != null && (result.TextDiffAnnotations > 0 ||
+                                                   symbols.Diffs.Count > 0 || moved.Pairs.Count > 0))
                         LogAnnotations(result, a, b, diffsDirectory, options);
 
                     return;
@@ -146,10 +160,11 @@ namespace PdfQualityCompare
                 {
                     writer.WriteLine("Document    : {0}", result.Name);
                     writer.WriteLine("Generated   : {0:yyyy-MM-dd HH:mm:ss}", DateTime.Now);
-                    if (result.SuppressedSymbolDiffs.Count > 0)
+                    // Two IDs go per cancelled pair, so that is what the count lost.
+                    int struckOff = result.SuppressedSymbolDiffs.Count + 2 * result.MovedTextRemoved;
+                    if (struckOff > 0)
                         writer.WriteLine("Differences : {0} kept of the {1} HighlightTextDiff reported",
-                            result.TextDiffDifferences,
-                            result.TextDiffDifferences + result.SuppressedSymbolDiffs.Count);
+                            result.TextDiffDifferences, result.TextDiffDifferences + struckOff);
                     else
                         writer.WriteLine("Differences : {0} reported by HighlightTextDiff", result.TextDiffDifferences);
                     writer.WriteLine("Annotations : {0} ({1} {2}, {3} {4})",
@@ -157,6 +172,7 @@ namespace PdfQualityCompare
                         result.ReferenceDiffAnnotations, options.ReferenceLabel,
                         result.CandidateDiffAnnotations, options.CandidateLabel);
                     WriteSuppressedSymbols(writer, result, options);
+                    WriteMovedText(writer, result, options);
 
                     WriteSide(writer, options.ReferenceLabel, reference);
                     WriteSide(writer, options.CandidateLabel, candidate);
@@ -187,6 +203,36 @@ namespace PdfQualityCompare
                              options.ReferenceLabel, options.CandidateLabel);
             foreach (SymbolEncodingDiff d in result.SuppressedSymbolDiffs)
                 writer.WriteLine("              TextDiffID {0}: {1}", d.Id, SymbolEncodingDiffs.Describe(d));
+        }
+
+        /// <summary>
+        /// Records text the comparison struck out of one document and inserted into the
+        /// other under a different ID, which cancels out and so overstates what changed.
+        /// Says of each pair whether it was taken off or kept, because the annotations of a
+        /// cancelled pair are gone by now and the ones that were kept are below.
+        /// </summary>
+        private static void WriteMovedText(TextWriter writer, DocResult result, Options options)
+        {
+            if (result.MovedText.Count == 0) return;
+
+            int characters = 0;
+            foreach (MovedTextDiff m in result.MovedText) characters += m.Characters;
+
+            writer.WriteLine("Moved text  : {0} deletion/insertion pair(s) carrying the same text, {1} character(s); " +
+                             "{2} cancelled as never having moved, {3} kept as genuinely moved",
+                             result.MovedText.Count, characters,
+                             result.MovedTextRemoved, result.MovedText.Count - result.MovedTextRemoved);
+            if (result.MovedTextRemoved > 0)
+                writer.WriteLine("              {0} annotation(s) and {1} difference(s) removed from both documents",
+                                 result.MovedTextAnnotations, 2 * result.MovedTextRemoved);
+
+            foreach (MovedTextDiff m in result.MovedText)
+                writer.WriteLine("              [{0}] {1} TextDiffID {2} p{3} deleted = {4} TextDiffID {5} p{6} " +
+                                 "inserted, {7} char(s): {8}",
+                    m.Removed ? "cancelled" : "kept, moved",
+                    options.ReferenceLabel, m.ReferenceId, m.ReferencePage,
+                    options.CandidateLabel, m.CandidateId, m.CandidatePage,
+                    m.Characters, Quote(m.Text));
         }
 
         private static void WriteSide(TextWriter writer, string label, PDFDoc doc)
@@ -356,17 +402,5 @@ namespace PdfQualityCompare
             return opts;
         }
 
-        private static int CountAnnotations(PDFDoc doc)
-        {
-            int total = 0;
-            int pages = doc.GetPageCount();
-            for (int i = 1; i <= pages; i++)
-            {
-                Page page = doc.GetPage(i);
-                if (page == null || !page.IsValid()) continue;
-                total += page.GetNumAnnots();
-            }
-            return total;
-        }
     }
 }

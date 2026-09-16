@@ -18,6 +18,71 @@
   </ItemGroup>
 
   <!--
+    Stamps the build with the commit it was built from, so a report can be tied back to
+    the code that produced it. Asked at build time rather than at run time on purpose: the
+    exe outlives the checkout it came from, and asking git when the report is written would
+    describe whatever repository the tool happens to be started in.
+
+    Nothing here can fail the build. A machine with no git, or a copy of the source taken
+    outside the repository, reports "unknown", and anything uncommitted in the project adds
+    a "+changes" marker - a hash on its own would otherwise claim a provenance the binary
+    does not have.
+
+    Every value is taken only when git exited cleanly. ConsoleToMSBuild captures git's
+    error output as well as its answer, so a failed call otherwise hands back the text of
+    the complaint, and "fatal: not a git repository" ends up stamped on the build as though
+    it were a commit.
+  -->
+  <Target Name="StampBuildCommit" BeforeTargets="GetAssemblyAttributes">
+    <Exec Command="git -C &quot;$(MSBuildProjectDirectory)&quot; rev-parse --short=12 HEAD 2&gt;nul"
+          ConsoleToMSBuild="true" StandardOutputImportance="low" StandardErrorImportance="low"
+          ContinueOnError="true" IgnoreExitCode="true">
+      <Output TaskParameter="ConsoleOutput" PropertyName="HeadCommit" />
+      <Output TaskParameter="ExitCode" PropertyName="HeadCommitExit" />
+    </Exec>
+    <!--
+      The %25%25 is two escapes stacked, not a typo: MSBuild turns %25 into %, and the
+      command then runs through cmd, which collapses %% into %. Git ends up seeing the
+      plain %ad it needs. A single escape at either layer loses the format string, and
+      git falls back to its default multi line output.
+    -->
+    <Exec Command="git -C &quot;$(MSBuildProjectDirectory)&quot; log -1 --date=short --format=%25%25ad 2&gt;nul"
+          ConsoleToMSBuild="true" StandardOutputImportance="low" StandardErrorImportance="low"
+          ContinueOnError="true" IgnoreExitCode="true">
+      <Output TaskParameter="ConsoleOutput" PropertyName="HeadCommitDate" />
+      <Output TaskParameter="ExitCode" PropertyName="HeadCommitDateExit" />
+    </Exec>
+    <!-- Any output at all means something is modified or untracked in the project. -->
+    <Exec Command="git -C &quot;$(MSBuildProjectDirectory)&quot; status --porcelain -- . 2&gt;nul"
+          ConsoleToMSBuild="true" StandardOutputImportance="low" StandardErrorImportance="low"
+          ContinueOnError="true" IgnoreExitCode="true">
+      <Output TaskParameter="ConsoleOutput" PropertyName="ProjectStatus" />
+      <Output TaskParameter="ExitCode" PropertyName="ProjectStatusExit" />
+    </Exec>
+
+    <PropertyGroup>
+      <BuildCommit>unknown</BuildCommit>
+      <BuildCommit Condition="'$(HeadCommitExit)' == '0' and '$(HeadCommit)' != ''">$(HeadCommit)</BuildCommit>
+      <BuildCommit Condition="'$(BuildCommit)' != 'unknown' and '$(ProjectStatusExit)' == '0' and '$(ProjectStatus)' != ''">$(BuildCommit)+changes</BuildCommit>
+      <BuildCommitDate Condition="'$(HeadCommitDateExit)' == '0'">$(HeadCommitDate)</BuildCommitDate>
+    </PropertyGroup>
+
+    <ItemGroup>
+      <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+        <_Parameter1>BuildCommit</_Parameter1>
+        <_Parameter2>$(BuildCommit)</_Parameter2>
+      </AssemblyAttribute>
+      <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute"
+                         Condition="'$(BuildCommitDate)' != ''">
+        <_Parameter1>BuildCommitDate</_Parameter1>
+        <_Parameter2>$(BuildCommitDate)</_Parameter2>
+      </AssemblyAttribute>
+    </ItemGroup>
+
+    <Message Importance="normal" Text="Build stamped with commit $(BuildCommit)" />
+  </Target>
+
+  <!--
     If the sibling Sanitization project already holds a license key, reuse it so the
     tool runs with no extra setup. Otherwise pass a key on the command line, or set
     the APRYSE_LICENSE_KEY environment variable.

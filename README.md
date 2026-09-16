@@ -57,6 +57,24 @@ Written to the `--out` directory:
   document with no highlights gets no file, because the copy would be the candidate
   unchanged. `--no-annotations` skips the pass and the folder is not created.
 
+Every one of them carries the commit the tool was built from, so a figure can be traced
+back to the code that worked it out and two reports that disagree can be told apart by
+more than their dates — the console header and the `report.html` subtitle show it,
+`details.json` has `buildCommit` and `buildCommitDate`, and `summary.csv` has a
+`build_commit` column, constant down the file so a merged CSV still says which build
+produced each row.
+
+```
+Build     : 3239018c5de7+changes (2026-09-16)
+```
+
+Two suffixes are worth reading carefully. **`+changes`** means something in the project was
+uncommitted when the binary was built, so it cannot be reproduced from that commit alone.
+**`unknown`** means the build could not ask git — the source was taken out of its
+repository, or git is not installed. The stamp is taken at build time, not when the report
+is written: the exe outlives the checkout it came from, and asking git at run time would
+describe whatever repository the tool happened to be started in.
+
 ## What it measures
 
 **Fonts.** Every font is reduced to a family plus bold/italic flags, so `BCDEEE+Calibri-Bold`,
@@ -89,33 +107,48 @@ deletion and its replacement count once), and the split between the two sides. A
 are added to in-memory copies — the files on disk are never modified — unless `--diff-pdf`
 asks for highlighted copies to be saved.
 
-One class of difference is struck out before anything is counted. A symbol from an Office
-document reaches a PDF either as its real Unicode codepoint or as the code its symbolic
-font uses, which the extractor reports in the private use area at U+F000 plus that code:
+One class of difference is struck out before anything is counted: the marks the two runs
+draw identically and spell differently. Mostly that is a change of encoding — a symbol
+from an Office document reaches a PDF either as its real Unicode codepoint or as the code
+its symbolic font uses, which the extractor reports in the private use area at U+F000 plus
+that code. The rest are characters that are simply indistinguishable in print.
 
-| symbol | Unicode | symbolic font | also seen as |
+| mark | usually | symbolic font | also seen as |
 | --- | --- | --- | --- |
-| tick | U+2713 | U+F0FC (Wingdings `u`) | |
+| tick | U+2713 | U+F0FC (Wingdings `0xFC`) | |
 | bullet | U+2022 | U+F0B7 (Symbol `0xB7`) | U+00B7 |
 | em dash | U+2014 | U+F097 (Symbol `0x97`) | U+0097 |
-
-The table lives in `Equivalences` in [SymbolEncodingDiffs.cs](SymbolEncodingDiffs.cs) and is
-written as hex codepoints rather than character literals: most of these have no glyph in an
-editor font, and as literals they are blank boxes in the one place they have to be read.
+| arrowhead | U+27A2 | U+F0D8 (Wingdings `0xD8`) | |
+| square | U+25AA | U+F0A7 (Wingdings `0xA7`) | |
+| hyphen | U+002D | — | U+2010, U+2011 |
 
 Either way the same mark is drawn, so a run that emitted one where the other emitted the
 other is visually identical and yet `HighlightTextDiff` reports it — which otherwise puts
-a difference against every ticked checkbox, every bullet and every dash in the corpus.
+a difference against every ticked checkbox, every bullet and every hyphenated word in the
+corpus.
+
 Two marks have a third spelling. A bullet normally extracts as U+2022, but a middle-dot
 reading of the same Symbol `0xB7` code gives U+00B7. The em dash's symbolic code `0x97` is
 also the Windows-1252 byte for it, so a font with no usable mapping at all can extract as
 U+0097 — the C1 control at that code, which is never real text and so is safe to read as
 the dash it was meant to be.
 
+The hyphens are the one entry that is a judgement rather than a fact. U+002D, U+2010 and
+U+2011 are three genuinely different characters, not three spellings of one — the last is
+a *non-breaking* hyphen, so a converter that swaps it for an ordinary one has changed where
+a line may break. They are folded together because they are indistinguishable on the page,
+which is what this comparison is about, and because the effect a changed line break
+actually has shows up in the layout and reading order metrics on its own. Delete the line
+from `Equivalences` to have them counted again.
+
+The table lives in `Equivalences` in [SymbolEncodingDiffs.cs](SymbolEncodingDiffs.cs) and is
+written as hex codepoints rather than character literals: most of these have no glyph in an
+editor font, and as literals they are blank boxes in the one place they have to be read.
+
 Each difference carries a `TextDiffID` in its custom data, shared by the highlight on the
 reference and the one on the candidate, and the changed text itself sits in the title
 `/T`. Where the two titles line up character for character and every character that
-changed only changed encoding, both highlights are removed from both documents, the
+changed is one of the marks above, both highlights are removed from both documents, the
 difference is left out of the counts, and what went is recorded — in the annotation log,
 in `encoding_diffs_ignored` and `encoding_diffs_detail` in the CSV, and on the
 `Encoding-only ignored` line of the summary. Positions that are already equal are allowed
@@ -124,6 +157,30 @@ bullet beside it arrive as a single hunk, and pulling it apart is the only way t
 nothing in it actually changed. At least one position must differ, so a difference that is
 only a change of spacing stays a difference, as does a symbol with no partner on the other
 side or one that met a different symbol.
+
+**Text counted twice over.** `HighlightTextDiff` does not always pair a run of text with
+its counterpart: where it cannot, it emits two differences instead of one — a `delete`
+whose text sits on the reference, and an `insert` carrying the same text on the candidate,
+under a different `TextDiffID`. Each looks like a whole paragraph vanishing or appearing;
+together they cancel out. [MovedTextDiffs.cs](MovedTextDiffs.cs) matches them on text
+equality, with whitespace runs collapsed and anything under eight characters ignored so
+short strings do not pair up by chance.
+
+What happens next depends on where the two halves sit. If they cover much the same part of
+the same page then the text never moved and only the order the extractor walked the page
+in changed, so both `TextDiffID`s are struck off both documents — four groups of
+annotations, because each ID has its text on one side and an empty marker on the other.
+If they sit in different places the text really is somewhere else, which is a finding, and
+one the reading order metrics measure in their own right; those pairs are reported and
+kept. Either way both kinds appear in the annotation log, in `moved_text_pairs`,
+`moved_text_chars`, `moved_text_cancelled` and `moved_text_annotations_removed` in the
+CSV, and on the `Moved text cancelled` line of the summary.
+
+**Counting the highlights.** The annotation counts come from looking for the comparison's
+own highlights — the ones carrying a `TextDiffID` — and not from the growth in each
+document's annotation total. `HighlightTextDiff` clears the annotations a document arrived
+with, so on a document that had any, the difference between the two totals is smaller than
+the number of highlights added, and can be zero.
 
 Adding another equivalent pair is one line in `Equivalences`. To find out what a corpus
 actually needs, run it and read the `/T` values in the `.annotations.txt` logs: the

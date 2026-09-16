@@ -75,6 +75,7 @@ namespace PdfQualityCompare
                 return 4;
             }
 
+            Console.WriteLine("Build     : {0}", BuildStamp.Describe());
             Console.WriteLine("Reference : {0}", options.ReferenceRoot);
             Console.WriteLine("Candidate : {0}", options.CandidateRoot);
             Console.WriteLine("Documents : {0}   threads: {1}{2}{3}", pairs.Count, options.Threads,
@@ -250,16 +251,33 @@ namespace PdfQualityCompare
         }
 
         /// <param name="busy">
-        /// Workers inside a document comparison at this moment. Not the process thread
-        /// count, which also covers idle thread pool threads and the several the Apryse
-        /// SDK runs of its own, and so says nothing about how much work is in flight.
+        /// Workers inside a document comparison at this moment - the number that says how
+        /// much comparison work is in flight.
         /// </param>
         private static void ReportProgress(int done, int total, int busy, int threads, Stopwatch clock)
         {
             double rate = done / Math.Max(0.001, clock.Elapsed.TotalSeconds);
             // Trailing spaces because the line is redrawn in place and can get shorter.
-            Console.Write("\r  {0}/{1} documents  ({2:0.0}/s)  {3} of {4} thread(s) busy    ",
-                          done, total, rate, busy, threads);
+            Console.Write("\r  {0}/{1} documents  ({2:0.0}/s)  {3} of {4} thread(s) comparing, {5} in process    ",
+                          done, total, rate, busy, threads, ProcessThreads());
+        }
+
+        /// <summary>
+        /// Every OS thread the process is running, which is always well above the number
+        /// comparing: the thread pool keeps threads that are not being used, and the
+        /// Apryse SDK runs several of its own. Shown next to the comparing count so the
+        /// difference between the two is visible rather than misleading.
+        /// </summary>
+        private static int ProcessThreads()
+        {
+            try
+            {
+                using (Process self = Process.GetCurrentProcess()) return self.Threads.Count;
+            }
+            catch (Exception)
+            {
+                return 0;
+            }
         }
 
         /// <summary>
@@ -456,6 +474,8 @@ namespace PdfQualityCompare
             long symbolDiffs = 0;
             int symbolDocs = 0;
             var bySymbol = new Dictionary<string, int>(StringComparer.Ordinal);
+            long movedPairs = 0, movedChars = 0, movedCancelled = 0;
+            int movedDocs = 0;
 
             foreach (DocResult r in docs)
             {
@@ -474,6 +494,13 @@ namespace PdfQualityCompare
                     differences += r.TextDiffDifferences;
                     annotated++;
                     if (r.TextDiffAnnotations == 0) annotatedClean++;
+                    if (r.MovedText.Count > 0)
+                    {
+                        movedPairs += r.MovedText.Count;
+                        movedChars += ReportWriter.MovedChars(r.MovedText);
+                        movedCancelled += r.MovedTextRemoved;
+                        movedDocs++;
+                    }
                     if (r.SuppressedSymbolDiffs.Count > 0)
                     {
                         symbolDiffs += r.SuppressedSymbolDiffs.Count;
@@ -509,6 +536,10 @@ namespace PdfQualityCompare
                 if (symbolDiffs > 0)
                     Console.WriteLine("Encoding-only ignored   : {0} difference(s) over {1} document(s) ({2})",
                         symbolDiffs, symbolDocs, SymbolEncodingDiffs.Breakdown(bySymbol));
+                if (movedPairs > 0)
+                    Console.WriteLine("Moved text cancelled    : {0} of {1} pair(s) over {2} document(s), {3} chars; " +
+                        "{4} kept as genuinely moved",
+                        movedCancelled, movedPairs, movedDocs, movedChars, movedPairs - movedCancelled);
             }
             if (visualCount > 0)
                 Console.WriteLine("Mean pixel difference   : {0:0.00}%", visual / visualCount);

@@ -8,25 +8,28 @@ using pdftron.PDF.Annots;
 namespace PdfQualityCompare
 {
     /// <summary>
-    /// Drops the differences that are only a change of encoding.
+    /// Drops the differences where the two documents draw the same mark and spell it
+    /// differently.
     ///
-    /// A symbol from an Office document reaches a PDF one of two ways: as its real
-    /// Unicode codepoint, or as the code a symbolic font uses, which the extractor
-    /// reports in the private use area at U+F000 plus that code. A ticked checkbox is
-    /// either U+2713 or Wingdings 'u' at U+F0FC; a bullet is either U+2022 or Symbol's
-    /// 0xB7 at U+F0B7; an em dash is either U+2014 or Symbol's 0x97 at U+F097. Either
-    /// way the same mark is drawn, so a run that emitted one where the other run emitted
-    /// the other is visually identical and yet HighlightTextDiff reports it - once on
-    /// each side - which puts a difference against every ticked checkbox, every bullet
-    /// and every dash in the corpus.
+    /// Mostly that is a change of encoding. A symbol from an Office document reaches a
+    /// PDF one of two ways: as its real Unicode codepoint, or as the code a symbolic
+    /// font uses, which the extractor reports in the private use area at U+F000 plus
+    /// that code. A ticked checkbox is either U+2713 or Wingdings 'u' at U+F0FC; a
+    /// bullet is either U+2022 or Symbol's 0xB7 at U+F0B7. The rest are characters that
+    /// are simply indistinguishable in print, the hyphens being the case that matters.
+    ///
+    /// Either way the same mark is drawn, so a run that emitted one where the other run
+    /// emitted the other is visually identical and yet HighlightTextDiff reports it -
+    /// once on each side - which puts a difference against every ticked checkbox, every
+    /// bullet and every hyphenated word in the corpus.
     ///
     /// The comparison tags each difference with a TextDiffID, in the annotation's
     /// custom data, shared by the highlight it puts on the reference and the one it
     /// puts on the candidate; the changed text itself goes in the title, /T. Where the
-    /// two titles line up character for character and every character that changed only
-    /// changed encoding, both highlights are taken off before anything is counted or
-    /// saved. A symbol with no partner on the other side, or one that met a different
-    /// symbol, is a real difference and is left alone.
+    /// two titles line up character for character and every character that changed is
+    /// one of these, both highlights are taken off before anything is counted or saved.
+    /// A mark with no partner on the other side, or one that met a mark it is not
+    /// equivalent to, is a real difference and is left alone.
     /// </summary>
     internal static class SymbolEncodingDiffs
     {
@@ -60,9 +63,9 @@ namespace PdfQualityCompare
         }
 
         /// <summary>
-        /// The marks treated as encoding-equivalent. Adding one is a line here: its real
-        /// Unicode codepoint, then 0xF000 plus the code the symbolic font uses for it,
-        /// then any further codepoint the same mark has been seen extracted as.
+        /// The marks treated as equivalent. Adding one is a line here: the codepoint it
+        /// usually comes out as, then every other codepoint it has been seen as - for most
+        /// of these, 0xF000 plus the code its symbolic font uses.
         ///
         /// Some marks have a third spelling. A bullet comes out of Word as U+2022, but a
         /// middle-dot reading of the same Symbol 0xB7 code gives U+00B7. An em dash has a
@@ -70,20 +73,27 @@ namespace PdfQualityCompare
         /// no usable mapping at all can come out as U+0097 - the C1 control at that code,
         /// which is never real text and so is safe to read as the dash it was meant to be.
         ///
+        /// The hyphens are a different case, and the one entry here that is a judgement
+        /// rather than a fact. U+002D, U+2010 and U+2011 are three genuinely different
+        /// characters, not three spellings of one: the last is a non-breaking hyphen, and a
+        /// converter that swaps it for an ordinary one has changed where a line may break.
+        /// They are folded together because they are indistinguishable on the page, which
+        /// is what this comparison is about, and because the effect a changed line break
+        /// actually has shows up in the layout and reading order metrics on its own. Drop
+        /// the line to have them counted again.
+        ///
         /// No codepoint may appear against two names; the first match wins if one does.
         /// </summary>
         private static readonly Equivalence[] Equivalences =
         {
-            //               name        Unicode  symbolic       also seen as
+            //               name        usual    also          also
             new Equivalence("tick",      0x2713,  0xF0FC),                // Wingdings 0xFC
             new Equivalence("bullet",    0x2022,  0xF0B7,       0x00B7),  // Symbol 0xB7
             new Equivalence("em dash",   0x2014,  0xF097,       0x0097),  // Symbol 0x97
             new Equivalence("arrowhead", 0x27A2,  0xF0D8),                // Wingdings 0xD8
-            new Equivalence("square",    0x25AA,  0xF0A7)                 // Wingdings 0xA7
+            new Equivalence("square",    0x25AA,  0xF0A7),                // Wingdings 0xA7
+            new Equivalence("hyphen",    0x002D,  0x2010,       0x2011)   // hyphen, non-breaking
         };
-
-        /// <summary>Custom data key the comparison writes into both halves of a difference.</summary>
-        private const string IdKey = "TextDiffID";
 
         /// <summary>What was taken off the two documents, for the report and the log.</summary>
         internal sealed class Outcome
@@ -97,32 +107,24 @@ namespace PdfQualityCompare
             public string Error;
         }
 
-        /// <summary>One highlight, remembered by where it sits so it can be removed later.</summary>
-        private sealed class Mark
-        {
-            public int Page;
-            public int Index;
-            public string Title;
-        }
-
         public static Outcome Remove(PDFDoc reference, PDFDoc candidate)
         {
             var outcome = new Outcome();
             if (reference == null || candidate == null) return outcome;
 
-            Dictionary<string, List<Mark>> onReference = Collect(reference);
+            Dictionary<string, List<DiffHighlights.Highlight>> onReference = DiffHighlights.Collect(reference);
             if (onReference.Count == 0) return outcome;
-            Dictionary<string, List<Mark>> onCandidate = Collect(candidate);
+            Dictionary<string, List<DiffHighlights.Highlight>> onCandidate = DiffHighlights.Collect(candidate);
 
-            var fromReference = new List<Mark>();
-            var fromCandidate = new List<Mark>();
+            var fromReference = new List<DiffHighlights.Highlight>();
+            var fromCandidate = new List<DiffHighlights.Highlight>();
 
-            foreach (KeyValuePair<string, List<Mark>> pair in onReference)
+            foreach (KeyValuePair<string, List<DiffHighlights.Highlight>> pair in onReference)
             {
-                List<Mark> partner;
+                List<DiffHighlights.Highlight> partner;
                 if (!onCandidate.TryGetValue(pair.Key, out partner)) continue;
 
-                List<SymbolSubstitution> substitutions = Match(TitleOf(pair.Value), TitleOf(partner));
+                List<SymbolSubstitution> substitutions = Match(DiffHighlights.TitleOf(pair.Value), DiffHighlights.TitleOf(partner));
                 if (substitutions == null) continue;
 
                 outcome.Diffs.Add(new SymbolEncodingDiff
@@ -143,8 +145,8 @@ namespace PdfQualityCompare
             // Both sides in one pass each, rather than a pass per difference: removing an
             // annotation renumbers the ones after it on its page, so every removal has to
             // be known before the first one happens.
-            outcome.Annotations = RemoveMarks(reference, fromReference, outcome)
-                                + RemoveMarks(candidate, fromCandidate, outcome);
+            outcome.Annotations = DiffHighlights.Remove(reference, fromReference, ref outcome.Error)
+                                + DiffHighlights.Remove(candidate, fromCandidate, ref outcome.Error);
             return outcome;
         }
 
@@ -218,96 +220,6 @@ namespace PdfQualityCompare
             foreach (char c in text)
                 if (!char.IsWhiteSpace(c)) sb.Append(c);
             return sb.ToString();
-        }
-
-        /// <summary>
-        /// One difference's text on one side. A difference is normally one annotation per
-        /// side, but a run of changed text that straddles a line or a column is marked more
-        /// than once under the same ID, and the whole run is what has to be compared.
-        /// </summary>
-        private static string TitleOf(List<Mark> marks)
-        {
-            if (marks.Count == 1) return marks[0].Title;
-
-            var sb = new StringBuilder();
-            foreach (Mark m in marks) sb.Append(m.Title);
-            return sb.ToString();
-        }
-
-        /// <summary>
-        /// Every highlight that carries a TextDiffID, grouped by that ID, in the order the
-        /// pages present them so the text of a multi-part difference reads in order.
-        /// </summary>
-        private static Dictionary<string, List<Mark>> Collect(PDFDoc doc)
-        {
-            var found = new Dictionary<string, List<Mark>>(StringComparer.Ordinal);
-
-            int pages = doc.GetPageCount();
-            for (int p = 1; p <= pages; p++)
-            {
-                Page page = doc.GetPage(p);
-                if (page == null || !page.IsValid()) continue;
-
-                int count = page.GetNumAnnots();
-                for (int i = 0; i < count; i++)
-                {
-                    Annot annot;
-                    try { annot = page.GetAnnot(i); }
-                    catch (Exception) { continue; }
-                    if (annot == null || !annot.IsValid()) continue;
-
-                    string id, title;
-                    try
-                    {
-                        if (annot.GetType() != Annot.Type.e_Highlight) continue;
-                        id = annot.GetCustomData(IdKey);
-                        if (string.IsNullOrEmpty(id)) continue;
-                        title = new Markup(annot).GetTitle() ?? "";
-                    }
-                    catch (Exception)
-                    {
-                        continue;
-                    }
-
-                    List<Mark> marks;
-                    if (!found.TryGetValue(id, out marks))
-                    {
-                        marks = new List<Mark>();
-                        found.Add(id, marks);
-                    }
-                    marks.Add(new Mark { Page = p, Index = i, Title = title });
-                }
-            }
-            return found;
-        }
-
-        /// <summary>Removes the given highlights from one document and returns how many went.</summary>
-        private static int RemoveMarks(PDFDoc doc, List<Mark> marks, Outcome outcome)
-        {
-            // Last one on the page first, so the indices of those still to go stay valid.
-            marks.Sort(delegate (Mark x, Mark y)
-            {
-                int byPage = y.Page.CompareTo(x.Page);
-                return byPage != 0 ? byPage : y.Index.CompareTo(x.Index);
-            });
-
-            int removed = 0;
-            foreach (Mark m in marks)
-            {
-                try
-                {
-                    Page page = doc.GetPage(m.Page);
-                    if (page == null || !page.IsValid()) continue;
-                    page.AnnotRemove(m.Index);
-                    removed++;
-                }
-                catch (Exception ex)
-                {
-                    if (string.IsNullOrEmpty(outcome.Error))
-                        outcome.Error = "symbol highlight on page " + m.Page + ": " + ex.Message;
-                }
-            }
-            return removed;
         }
 
         /// <summary>"U+2713", for the log and the report.</summary>

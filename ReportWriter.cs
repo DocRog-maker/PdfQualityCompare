@@ -17,6 +17,9 @@ namespace PdfQualityCompare
             var sb = new StringBuilder();
             sb.AppendLine(string.Join(",", new[]
             {
+                // Constant down the file, so a CSV that has been merged with another run's
+                // still says which build worked each row out.
+                "build_commit",
                 "document","status","overall","text_score","layout_score","font_score","page_score",
                 "ref_pages","cand_pages","page_delta","pages_matched","pages_only_in_ref","pages_only_in_cand",
                 "page_size_mismatches","rotation_mismatches",
@@ -30,6 +33,7 @@ namespace PdfQualityCompare
                 "median_width_ratio","width_outliers","font_size_changes",
                 "text_diff_annotations","text_diff_differences","ref_diff_annotations","cand_diff_annotations",
                 "encoding_diffs_ignored","encoding_annotations_ignored","encoding_diffs_detail",
+                "moved_text_pairs","moved_text_chars","moved_text_cancelled","moved_text_annotations_removed",
                 "visual_diff_pct","worst_page_diff_pct","worst_page","error"
             }));
 
@@ -37,6 +41,7 @@ namespace PdfQualityCompare
             {
                 sb.AppendLine(string.Join(",", new[]
                 {
+                    Q(BuildStamp.Commit),
                     Q(r.Name), Q(r.Status), N(r.OverallScore), N(r.TextScore), N(r.LayoutScore), N(r.FontScore), N(r.PageScore),
                     I(r.ReferencePages), I(r.CandidatePages), I(r.PageDelta),
                     I(r.PagesMatched), I(r.PagesOnlyInReference), I(r.PagesOnlyInCandidate),
@@ -57,6 +62,8 @@ namespace PdfQualityCompare
                     I(r.ReferenceDiffAnnotations), I(r.CandidateDiffAnnotations),
                     I(r.SuppressedSymbolDiffs.Count), I(r.SuppressedSymbolAnnotations),
                     Q(EncodingDiffList(r.SuppressedSymbolDiffs)),
+                    I(r.MovedText.Count), I(MovedChars(r.MovedText)),
+                    I(r.MovedTextRemoved), I(r.MovedTextAnnotations),
                     N(r.VisualDiffPct, 3), N(r.WorstPageDiffPct, 3), I(r.WorstPageIndex), Q(r.Error)
                 }));
             }
@@ -70,6 +77,28 @@ namespace PdfQualityCompare
             var parts = new List<string>();
             foreach (SymbolEncodingDiff d in diffs) parts.Add(SymbolEncodingDiffs.Describe(d));
             return string.Join("; ", parts.ToArray());
+        }
+
+        /// <summary>Keeps one runaway paragraph from bloating the JSON.</summary>
+        private static string Clip(string s, int max)
+        {
+            if (string.IsNullOrEmpty(s) || s.Length <= max) return s;
+            return s.Substring(0, max) + "…";
+        }
+
+        public static int MovedChars(List<MovedTextDiff> moved)
+        {
+            int total = 0;
+            foreach (MovedTextDiff m in moved) total += m.Characters;
+            return total;
+        }
+
+        /// <summary>Characters claimed by the pairs that were cancelled, as against all found.</summary>
+        public static int MovedCharsRemoved(List<MovedTextDiff> moved)
+        {
+            int total = 0;
+            foreach (MovedTextDiff m in moved) if (m.Removed) total += m.Characters;
+            return total;
         }
 
         private static string FontList(List<FontDelta> fonts, bool useReferenceShare)
@@ -108,6 +137,8 @@ namespace PdfQualityCompare
         {
             var sb = new StringBuilder();
             sb.Append("{\"generated\":").Append(Js(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")));
+            sb.Append(",\"buildCommit\":").Append(Js(BuildStamp.Commit));
+            sb.Append(",\"buildCommitDate\":").Append(Js(BuildStamp.CommitDate));
             sb.Append(",\"referenceRoot\":").Append(Js(options.ReferenceRoot));
             sb.Append(",\"candidateRoot\":").Append(Js(options.CandidateRoot));
             sb.Append(",\"referenceLabel\":").Append(Js(options.ReferenceLabel));
@@ -215,6 +246,27 @@ namespace PdfQualityCompare
                       .Append('}');
                 }
                 sb.Append("]}");
+            }
+            sb.Append(']');
+            sb.Append(",\"movedTextPairs\":").Append(r.MovedText.Count);
+            sb.Append(",\"movedTextChars\":").Append(MovedChars(r.MovedText));
+            sb.Append(",\"movedTextCancelled\":").Append(r.MovedTextRemoved);
+            sb.Append(",\"movedTextCharsCancelled\":").Append(MovedCharsRemoved(r.MovedText));
+            sb.Append(",\"movedTextAnnotationsRemoved\":").Append(r.MovedTextAnnotations);
+            sb.Append(",\"movedText\":[");
+            for (int i = 0; i < r.MovedText.Count; i++)
+            {
+                MovedTextDiff m = r.MovedText[i];
+                if (i > 0) sb.Append(',');
+                sb.Append("{\"refId\":").Append(Js(m.ReferenceId))
+                  .Append(",\"candId\":").Append(Js(m.CandidateId))
+                  .Append(",\"refPage\":").Append(m.ReferencePage)
+                  .Append(",\"candPage\":").Append(m.CandidatePage)
+                  .Append(",\"chars\":").Append(m.Characters)
+                  .Append(",\"samePlace\":").Append(m.SamePlace ? "true" : "false")
+                  .Append(",\"cancelled\":").Append(m.Removed ? "true" : "false")
+                  .Append(",\"text\":").Append(Js(Clip(m.Text, 300)))
+                  .Append('}');
             }
             sb.Append(']');
             sb.Append(",\"highlightPdf\":").Append(Js(r.HighlightPdfPath));
@@ -430,7 +482,9 @@ const esc = s => (s ?? '').replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', 
 document.getElementById('sub').innerHTML =
   'Reference <code>' + esc(DATA.referenceRoot) + '</code> vs candidate <code>' + esc(DATA.candidateRoot) +
   '</code> &middot; ' + docs.length + ' documents &middot; ' + esc(DATA.generated) +
-  ' &middot; layout tolerance ' + DATA.layoutTolerance + 'pt';
+  ' &middot; layout tolerance ' + DATA.layoutTolerance + 'pt' +
+  ' &middot; build <code>' + esc(DATA.buildCommit) + '</code>' +
+  (DATA.buildCommitDate ? ' of ' + esc(DATA.buildCommitDate) : '');
 
 const compared = docs.filter(d => d.status === 'Compared');
 const fontMatched = compared.filter(d => d.fontsMatch);

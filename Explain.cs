@@ -60,6 +60,16 @@ namespace PdfQualityCompare
                 foreach (SymbolEncodingDiff d in r.SuppressedSymbolDiffs)
                     Console.WriteLine("    TextDiffID {0}: {1}", d.Id, SymbolEncodingDiffs.Describe(d));
             }
+            if (r.MovedText.Count > 0)
+            {
+                Console.WriteLine("  {0} deletion/insertion pair(s) carry the same text; {1} cancelled, {2} kept as genuinely moved:",
+                    r.MovedText.Count, r.MovedTextRemoved, r.MovedText.Count - r.MovedTextRemoved);
+                foreach (MovedTextDiff m in r.MovedText)
+                    Console.WriteLine("    [{0}] ID {1} p{2} deleted = ID {3} p{4} inserted, {5} char(s): \"{6}\"",
+                        m.Removed ? "cancelled" : "kept, moved",
+                        m.ReferenceId, m.ReferencePage, m.CandidateId, m.CandidatePage, m.Characters,
+                        m.Text.Length > 60 ? m.Text.Substring(0, 60) + "…" : m.Text);
+            }
             Console.WriteLine();
         }
 
