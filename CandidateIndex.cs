@@ -87,7 +87,10 @@ namespace PdfQualityCompare
             sb.Append(",\"extra\":").Append(r.ExtraFonts.Count);
             sb.Append(",\"fontsMatch\":").Append(r.FontsMatch ? "true" : "false");
             sb.Append(",\"marksRun\":").Append(r.TextDiffRun ? "true" : "false");
-            sb.Append(",\"marks\":").Append(r.TextDiffRun ? r.TextDiffAnnotations.ToString() : "null");
+            // The candidate's own highlights only. The comparison marks both sides, so the
+            // total counts every difference roughly twice and is not a measure of the
+            // candidate; the reference's share stays in the per-candidate CSV.
+            sb.Append(",\"marks\":").Append(r.TextDiffRun ? r.CandidateDiffAnnotations.ToString() : "null");
             sb.Append(",\"visual\":").Append(r.VisualRun ? ReportWriter.Jn(r.VisualDiffPct, 3) : "null");
             sb.Append('}');
         }
@@ -200,7 +203,8 @@ beside the score.</p>
 <div class=""wrap""><table id=""runs""><thead><tr>
   <th>Candidate</th><th>Documents</th><th>Overall</th><th>Text</th><th>Layout</th><th>Font</th>
   <th>Page</th><th class=""hidecol"">Content</th><th>Order</th><th class=""hidecol"">Misplaced</th>
-  <th>Marks</th><th>Fonts ok</th><th>Failed</th><th>Report</th>
+  <th title=""Highlight annotations the Apryse text comparison added to this candidate. The reference is marked up as well; those are counted separately."">Marks</th>
+  <th>Fonts ok</th><th>Failed</th><th>Report</th>
 </tr></thead><tbody id=""runsbody""></tbody></table></div>
 
 <h2>Document by document</h2>

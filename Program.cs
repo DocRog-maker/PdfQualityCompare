@@ -599,7 +599,7 @@ namespace PdfQualityCompare
         {
             double overall = 0, content = 0, order = 0, misplaced = 0, visual = 0;
             int pageDiff = 0, fontMissing = 0, textLost = 0, orderBad = 0, visualCount = 0;
-            long annotations = 0, differences = 0;
+            long annotations = 0, candAnnotations = 0, refAnnotations = 0, differences = 0;
             int annotated = 0, annotatedClean = 0;
             long symbolDiffs = 0;
             int symbolDocs = 0;
@@ -621,6 +621,8 @@ namespace PdfQualityCompare
                 if (r.TextDiffRun)
                 {
                     annotations += r.TextDiffAnnotations;
+                    candAnnotations += r.CandidateDiffAnnotations;
+                    refAnnotations += r.ReferenceDiffAnnotations;
                     differences += r.TextDiffDifferences;
                     annotated++;
                     if (r.TextDiffAnnotations == 0) annotatedClean++;
@@ -659,8 +661,13 @@ namespace PdfQualityCompare
             Console.WriteLine("Mean misplaced words    : {0:0.0}%", misplaced / n);
             if (annotated > 0)
             {
-                Console.WriteLine("Text diff annotations   : {0} over {1} document(s), {2} differences",
-                    annotations, annotated, differences);
+                // The candidate's own marks lead, because that is the run being assessed.
+                // The reference's are the other half of the same differences, not a second
+                // set of them, so they are shown beside rather than added in.
+                Console.WriteLine("Text diff marks         : {0} on the candidate ({1} on the reference) " +
+                    "over {2} document(s), {3} differences",
+                    candAnnotations, refAnnotations, annotated, differences);
+                // Clean on both sides: a document the comparison found nothing in at all.
                 Console.WriteLine("Documents with none     : {0} ({1:0.0}%)",
                     annotatedClean, 100.0 * annotatedClean / annotated);
                 if (symbolDiffs > 0)

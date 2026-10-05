@@ -353,6 +353,7 @@ namespace PdfQualityCompare
         public double ReadingOrder;
         public double MisplacedPct;
         public double FontsMatchPct;
+        /// <summary>Highlights on the candidate only - the comparison marks both sides.</summary>
         public long Marks;
         /// <summary>NaN when the raster comparison was not run.</summary>
         public double VisualDiffPct = double.NaN;
@@ -382,7 +383,7 @@ namespace PdfQualityCompare
                 a.ReadingOrder += r.ReadingOrderSimilarity;
                 a.MisplacedPct += r.MisplacedPct;
                 if (r.FontsMatch) fontsOk++;
-                if (r.TextDiffRun) a.Marks += r.TextDiffAnnotations;
+                if (r.TextDiffRun) a.Marks += r.CandidateDiffAnnotations;
                 if (r.VisualRun && !double.IsNaN(r.VisualDiffPct)) { visual += r.VisualDiffPct; visualCount++; }
 
                 // Summed here and divided below, so Overall stays negative on an empty set.

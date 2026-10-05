@@ -151,8 +151,17 @@ report it as catastrophic.
 
 **Apryse text diff annotations.** A second, independent opinion: `PDFDoc.HighlightTextDiff`
 runs the SDK's own comparison, which marks every difference with a highlight annotation.
-The report carries the annotation count, the SDK's own count of distinct differences (a
-deletion and its replacement count once), and the split between the two sides. Annotations
+
+Every difference is marked on *both* documents — its text on one side, its counterpart or
+an empty marker on the other — so the total across the two runs at roughly twice the
+difference count and measures neither run on its own. The **Marks** column and the
+`Apryse diff marks` figure therefore report the highlights on the **candidate** alone,
+which comes out within a mark or two of the difference count. The reference's share and
+the total are both still in the CSV, as `ref_diff_annotations` and
+`text_diff_annotations`, and a document's detail panel shows the split.
+
+The report also carries the SDK's own count of distinct differences (a
+deletion and its replacement count once). Annotations
 are added to in-memory copies — the files on disk are never modified — unless `--diff-pdf`
 asks for highlighted copies to be saved.
 
@@ -281,8 +290,9 @@ Measured against this corpus (100 docx conversions, office vs apryse-20260914):
 - Baseline pixel difference between two correct renderings of the same page is about
   1.4%, so treat anything under ~2% as renderer noise.
 - `HighlightTextDiff` produced 4055 annotations over 2206 differences across the corpus,
-  with 57 documents entirely clean. Annotations run at roughly twice the difference count
-  because both sides of an edit get marked.
+  with 57 documents entirely clean. That total runs at roughly twice the difference count
+  because both sides of an edit get marked, which is why the reported **Marks** figure is
+  the candidate's half of it.
 - The raster comparison renders at twice the comparison DPI and box-filters down. An
   earlier version used a 3x3 neighbourhood tolerance instead, which in dense text finds a
   near match for almost any pixel and hid genuine differences — don't reintroduce it.

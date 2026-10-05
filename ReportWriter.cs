@@ -497,7 +497,7 @@ tbody tr:hover{background:var(--panel)}
   <th data-k=""refPages"">Pages</th>
   <th data-k=""similarity"">Content</th>
   <th data-k=""readingOrder"">Order</th>
-  <th data-k=""textDiffAnnotations"" class=""mark-count"" title=""Highlight annotations added by the Apryse text comparison"">Marks</th>
+  <th data-k=""candDiffAnnotations"" class=""mark-count"" title=""Highlight annotations the Apryse text comparison added to the candidate. The reference is marked up as well; those are counted separately, in ref_diff_annotations in the CSV."">Marks</th>
   <th data-k=""missingFontCount"">Font &Delta;</th>
   <th data-k=""misplacedPct"">Misplaced</th>
   <th data-k=""p95Disp"">p95 shift</th>
@@ -544,8 +544,8 @@ function buildCards(set, includeFailed) {
     cards.push(['Failed', docs.filter(d => d.status !== 'Compared').length, 'documents']);
   }
   if (set.some(d => d.textDiffRun)) {
-    const marks = set.filter(d => d.textDiffRun).reduce((a, d) => a + d.textDiffAnnotations, 0);
-    cards.push(['Apryse diff marks', marks, 'annotations in total']);
+    const marks = set.filter(d => d.textDiffRun).reduce((a, d) => a + d.candDiffAnnotations, 0);
+    cards.push(['Apryse diff marks', marks, 'on ' + DATA.candidateLabel]);
   }
   if (DATA.visual) cards.push(['Mean pixel difference', fmt(mean(set, d => d.visualDiffPct), 2) + '%', '']);
   return cards;
@@ -609,8 +609,8 @@ function render() {
       '<td' + (d.refPages === d.candPages ? '' : ' class=""b""') + '>' + pages + '</td>' +
       '<td>' + fmt(100 * d.similarity, 2) + '%</td>' +
       '<td' + (d.readingOrder < d.similarity - 0.02 ? ' class=""w""' : '') + '>' + fmt(100 * d.readingOrder, 2) + '%</td>' +
-      '<td class=""mark-count' + (d.textDiffAnnotations > 0 ? ' w' : '') + '"">' +
-        (d.textDiffRun ? d.textDiffAnnotations : '–') + '</td>' +
+      '<td class=""mark-count' + (d.candDiffAnnotations > 0 ? ' w' : '') + '"">' +
+        (d.textDiffRun ? d.candDiffAnnotations : '–') + '</td>' +
       '<td' + (d.missingFonts.length ? ' class=""b""' : '') + '>' + (d.missingFonts.length ? '-' + d.missingFonts.length : '0') +
         (d.extraFonts.length ? ' / +' + d.extraFonts.length : '') + '</td>' +
       '<td>' + fmt(d.misplacedPct) + '%</td>' +

@@ -2,7 +2,7 @@
   "profiles": {
     "PdfQualityCompare": {
       "commandName": "Project",
-      "commandLineArgs": "-r C:\\benchmark-DOCXCORP\\office -c C:\\benchmark-DOCXCORP\\apryse\\generic -c \r\nC:\\benchmark-DOCXCORP\\libreoffice\\LibreOffice -o C:\\benchmark-DOCXCORP\\quality-report"
+      "commandLineArgs": "-r C:\\benchmark-govdocs1\\office -c C:\\benchmark-govdocs1\\apryse-single\\generic -c \r\nC:\\benchmark-govdocs1\\libreoffice\\LibreOffice -o C:\\benchmark-govdocs1\\quality-report"
     }
   }
 }
