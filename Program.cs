@@ -67,6 +67,8 @@ namespace PdfQualityCompare
             string label = "{0,-" + LabelWidth(options) + "} {1}";
 
             Console.WriteLine("Build     : {0}", BuildStamp.Describe());
+            Console.WriteLine("Layout    : {0}{1}", Options.Describe(options.Mode),
+                              options.ModeDetected ? ", detected from the roots" : ", from --mode");
             Console.WriteLine("Reference : " + label, options.ReferenceLabel, options.ReferenceRoot);
             if (many)
             {
@@ -100,8 +102,7 @@ namespace PdfQualityCompare
             foreach (CandidateOutcome o in outcomes) if (o.Results != null) usable++;
             if (usable == 0)
             {
-                Console.Error.WriteLine("Nothing was compared. Expected sub-folders with a '" +
-                                        options.PdfName + "' inside each root.");
+                Console.Error.WriteLine("Nothing was compared. " + Expected(options));
                 return 4;
             }
 
@@ -118,7 +119,9 @@ namespace PdfQualityCompare
             List<Pair> pairs = Discover(options, out ignored);
             if (pairs.Count == 0)
             {
-                outcome.Skipped = "no document folders with a '" + options.PdfName + "' on either side";
+                outcome.Skipped = options.Mode == LayoutMode.Flat
+                    ? "no PDFs in either root"
+                    : "no document folders with a '" + options.PdfName + "' on either side";
                 Console.Error.WriteLine("{0}: nothing to compare - {1}.", candidate.Label, outcome.Skipped);
                 if (ignored.Count > 0)
                     Console.Error.WriteLine("  {0} folder(s) held no PDF on either side: {1}",
@@ -310,12 +313,12 @@ namespace PdfQualityCompare
 
             if (matches.Count == 0)
             {
-                Console.Error.WriteLine("No document folder matches '{0}'.", options.ExplainDocument);
+                Console.Error.WriteLine("No document matches '{0}'.", options.ExplainDocument);
                 return 4;
             }
             if (matches.Count > 1)
             {
-                Console.Error.WriteLine("'{0}' matches {1} folders; be more specific:", options.ExplainDocument, matches.Count);
+                Console.Error.WriteLine("'{0}' matches {1} documents; be more specific:", options.ExplainDocument, matches.Count);
                 for (int i = 0; i < Math.Min(10, matches.Count); i++) Console.Error.WriteLine("  " + matches[i].Name);
                 return 4;
             }
@@ -344,7 +347,7 @@ namespace PdfQualityCompare
                     CandidatePath = pair.CandidatePdf,
                     Status = refSide ? "RefMissing" : "CandMissing",
                     Error = (refSide ? options.ReferenceLabel : options.CandidateLabel) + ": " +
-                            WhyNoPdf(refSide ? pair.ReferenceDir : pair.CandidateDir, options.PdfName)
+                            WhyNoPdf(pair, refSide, options)
                 };
             }
 
@@ -437,12 +440,85 @@ namespace PdfQualityCompare
             public string CandidatePdf;
         }
 
+        private static List<Pair> Discover(Options options, out List<string> ignored)
+        {
+            return options.Mode == LayoutMode.Flat
+                ? DiscoverFlat(options, out ignored)
+                : DiscoverQualitron(options, out ignored);
+        }
+
+        /// <summary>What a root would have had to hold, for the message when none of them did.</summary>
+        private static string Expected(Options options)
+        {
+            return options.Mode == LayoutMode.Flat
+                ? "Expected PDFs directly in each root, named after their source documents."
+                : "Expected sub-folders with a '" + options.PdfName + "' inside each root.";
+        }
+
+        /// <summary>
+        /// The PDFs lie directly in each root and carry their own names, so the document is
+        /// the file name without its extension: 042013.pdf under every root is one document.
+        /// </summary>
+        /// <param name="ignored">
+        /// Always empty. Nothing is skipped in this layout - a file is a PDF and is a
+        /// document, or it is not a PDF and was never listed.
+        /// </param>
+        private static List<Pair> DiscoverFlat(Options options, out List<string> ignored)
+        {
+            ignored = new List<string>();
+            var names = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
+            Dictionary<string, string> refPdfs = FlatPdfs(options.ReferenceRoot, names);
+            Dictionary<string, string> candPdfs = FlatPdfs(options.CandidateRoot, names);
+
+            var pairs = new List<Pair>();
+            foreach (string name in names)
+            {
+                if (!string.IsNullOrEmpty(options.Filter) &&
+                    name.IndexOf(options.Filter, StringComparison.OrdinalIgnoreCase) < 0) continue;
+
+                string rp, cp;
+                refPdfs.TryGetValue(name, out rp);
+                candPdfs.TryGetValue(name, out cp);
+
+                pairs.Add(new Pair
+                {
+                    Name = name,
+                    // The root itself, so a missing document is reported against the folder
+                    // that should have held it.
+                    ReferenceDir = options.ReferenceRoot,
+                    CandidateDir = options.CandidateRoot,
+                    ReferencePdf = rp,
+                    CandidatePdf = cp
+                });
+
+                if (options.Limit > 0 && pairs.Count >= options.Limit) break;
+            }
+            return pairs;
+        }
+
+        /// <summary>Every PDF directly in <paramref name="root"/>, keyed on its name without the extension.</summary>
+        private static Dictionary<string, string> FlatPdfs(string root, SortedSet<string> names)
+        {
+            var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            string[] files;
+            try { files = Directory.GetFiles(root, "*.pdf", SearchOption.TopDirectoryOnly); }
+            catch (Exception) { return map; }
+
+            foreach (string f in files)
+            {
+                string n = Path.GetFileNameWithoutExtension(f);
+                map[n] = f;
+                names.Add(n);
+            }
+            return map;
+        }
+
         /// <param name="ignored">
         /// Folder names that hold no PDF on either side. A benchmark root usually carries
         /// bookkeeping folders alongside the converted documents - ConversionTimes, Report
         /// and so on - and listing those as failures would bury the real ones.
         /// </param>
-        private static List<Pair> Discover(Options options, out List<string> ignored)
+        private static List<Pair> DiscoverQualitron(Options options, out List<string> ignored)
         {
             ignored = new List<string>();
             var names = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -508,6 +584,14 @@ namespace PdfQualityCompare
         /// "the folder is not there", "the conversion produced nothing" and "there are
         /// several PDFs and no way to tell which" call for quite different responses.
         /// </summary>
+        private static string WhyNoPdf(Pair pair, bool refSide, Options options)
+        {
+            // Flat roots have only the one reason: this run did not produce that file.
+            if (options.Mode == LayoutMode.Flat) return "no " + pair.Name + ".pdf in the folder";
+
+            return WhyNoPdf(refSide ? pair.ReferenceDir : pair.CandidateDir, options.PdfName);
+        }
+
         private static string WhyNoPdf(string dir, string pdfName)
         {
             if (dir == null) return "no folder of this name";

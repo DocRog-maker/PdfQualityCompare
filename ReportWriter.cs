@@ -177,6 +177,7 @@ namespace PdfQualityCompare
             // to the index that holds the rest.
             sb.Append(",\"indexHref\":").Append(options.Candidates.Count > 1 ? Js("../index.html") : "null");
             sb.Append(",\"pdfName\":").Append(Js(options.PdfName));
+            sb.Append(",\"mode\":").Append(Js(options.Mode == LayoutMode.Flat ? "flat" : "qualitron"));
             sb.Append(",\"layoutTolerance\":").Append(Jn(options.LayoutTolerance));
             sb.Append(",\"visual\":").Append(options.Visual ? "true" : "false");
             sb.Append(",\"weights\":{\"text\":").Append(Jn(options.WeightText))
@@ -521,6 +522,7 @@ document.getElementById('sub').innerHTML =
   esc(DATA.referenceLabel) + ' <code>' + esc(DATA.referenceRoot) + '</code> vs ' +
   esc(DATA.candidateLabel) + ' <code>' + esc(DATA.candidateRoot) +
   '</code> &middot; ' + docs.length + ' documents &middot; ' + esc(DATA.generated) +
+  ' &middot; ' + esc(DATA.mode) + ' layout' +
   ' &middot; layout tolerance ' + DATA.layoutTolerance + 'pt' +
   ' &middot; build <code>' + esc(DATA.buildCommit) + '</code>' +
   (DATA.buildCommitDate ? ' of ' + esc(DATA.buildCommitDate) : '');

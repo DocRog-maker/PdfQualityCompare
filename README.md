@@ -1,7 +1,14 @@
 # PdfQualityCompare
 
 Compares one or more runs of PDF conversion output against a reference run and reports
-where they differ, using the Apryse (PDFTron) SDK. Built for benchmark trees of the shape
+where they differ, using the Apryse (PDFTron) SDK. One root is the output you trust (for
+example the MS Office conversion), the others the output you are assessing.
+
+## Root layouts
+
+Two shapes are read. **Qualitron mode** is the layout the Qualitron benchmark harness
+produces — one sub-folder per source document, named after it, each holding the converted
+PDF under a fixed name:
 
 ```
 <root>/
@@ -11,20 +18,48 @@ where they differ, using the Apryse (PDFTron) SDK. Built for benchmark trees of 
     pdf.pdf
 ```
 
-where the same document folder names appear under every root — one root being the
-output you trust (for example the MS Office conversion), the others the output you are
-assessing.
+**Flat mode** is a plain folder of PDFs, each named after its own source document. The
+document name is the file name without the `.pdf`, so `042013.pdf` in each root is one
+document compared across the runs:
 
-A folder that holds no PDF on either side is not a document, so bookkeeping folders that
-sit alongside the conversions — `ConversionTimes`, `Report` and the like — are ignored and
-kept out of the report. The count of what was skipped is printed at the start of the run.
-A folder with a PDF on only one side is a different matter and is always reported: that is
-a conversion that produced nothing.
+```
+<root>/
+  042013.pdf
+  042015.pdf
+```
+
+Either way the same document names must appear in every root, and a name present in some
+roots but not others is reported rather than dropped.
+
+Which layout is in use is worked out from the roots themselves, so neither needs a flag:
+a root with any sub-folder holding a PDF reads as qualitron, otherwise one with PDFs
+directly in it reads as flat. Sub-folders deliberately win, because a benchmark tree
+regularly carries a stray report PDF beside the document folders and that should not make
+it read as flat. The case this gets wrong is a flat folder that happens to contain a
+sub-folder of PDFs; `--mode qualitron` or `--mode flat` settles it.
+
+One mode covers the whole run. A document is identified by its folder name in one layout
+and by its file name in the other, so roots that disagree would pair nothing at all — the
+run stops and says so rather than reporting every document as a missing conversion.
+`--pdf-name` applies to qualitron mode only; flat mode takes each PDF's own name.
+
+In qualitron mode a folder that holds no PDF on either side is not a document, so
+bookkeeping folders that sit alongside the conversions — `ConversionTimes`, `Report` and
+the like — are ignored and kept out of the report. The count of what was skipped is
+printed at the start of the run. A folder with a PDF on only one side is a different
+matter and is always reported: that is a conversion that produced nothing. Flat mode has
+nothing to skip — a file is a PDF and is a document, or it was never listed.
 
 ## Running it
 
 ```bash
 PdfQualityCompare.exe -r C:\benchmark-qualitron\office -c C:\benchmark-qualitron\apryse-20260914\Generic -o C:\reports\apryse-20260914
+```
+
+The same command reads a flat folder of PDFs; nothing but the roots changes:
+
+```bash
+PdfQualityCompare.exe -r ApryseOfficeToPDF\word-pdfs -c ApryseOfficeToPDF\apryse-pdfs -o C:\reports\flat
 ```
 
 Add `--visual` to also rasterise and compare pixels (roughly 4x slower, and the most
@@ -36,10 +71,11 @@ highlighted copy of each side.
 
 | Option | Purpose |
 | --- | --- |
+| `--mode <qualitron\|flat>` | Force a root layout instead of detecting it. |
 | `--limit <n>` / `--filter <text>` | Work on a subset while you are calibrating. |
 | `--layout-tolerance <pt>` | How far a word may move before it counts as misplaced (default 3.0). |
 | `--weights t,l,f,p` | Re-weight the overall score across text, layout, font, page. |
-| `--explain <folder>` | Diagnose a single document instead of running a batch. |
+| `--explain <name>` | Diagnose a single document instead of running a batch. |
 | `--visual-dpi <n>` | Comparison resolution; rendering happens at twice this. |
 | `--no-annotations` | Skip the Apryse `HighlightTextDiff` pass (it costs about 5s per 100 documents). |
 | `--highlight-moves` | Let that pass mark moved text too, which counts moves as differences. |

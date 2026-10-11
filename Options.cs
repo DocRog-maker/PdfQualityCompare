@@ -6,6 +6,24 @@ using System.Text;
 
 namespace PdfQualityCompare
 {
+    /// <summary>How the converted PDFs are laid out under each root.</summary>
+    internal enum LayoutMode
+    {
+        /// <summary>
+        /// One sub-folder per source document, named after it, holding the converted PDF
+        /// under a fixed name (see <see cref="Options.PdfName"/>). The layout the Qualitron
+        /// benchmark harness produces, and the only one this tool originally read.
+        /// </summary>
+        Qualitron,
+
+        /// <summary>
+        /// The PDFs sit directly in the root, each named after its own source document.
+        /// The document name is the file name without the .pdf extension, so 042013.pdf
+        /// in each root is one document compared across the runs.
+        /// </summary>
+        Flat
+    }
+
     /// <summary>
     /// One candidate run: a root of converted output, the name it is reported under, and
     /// the directory its own report is written to. Several of these are compared against
@@ -35,10 +53,20 @@ namespace PdfQualityCompare
         public string CandidateRoot;
         public string OutputDir;
 
-        /// <summary>Name of the PDF inside each per-document folder.</summary>
+        /// <summary>
+        /// How every root in this run is laid out. Detected from the roots unless --mode
+        /// named one; one mode applies to the whole run, because a document has to be
+        /// identified the same way on both sides to be paired at all.
+        /// </summary>
+        public LayoutMode Mode = LayoutMode.Qualitron;
+
+        /// <summary>True until --mode names one, and then again once detection has run.</summary>
+        public bool ModeDetected = true;
+
+        /// <summary>Name of the PDF inside each per-document folder. Qualitron mode only.</summary>
         public string PdfName = "pdf.pdf";
 
-        /// <summary>Case-insensitive substring a folder name must contain to be compared.</summary>
+        /// <summary>Case-insensitive substring a document name must contain to be compared.</summary>
         public string Filter;
 
         /// <summary>Stop after this many documents (0 = all).</summary>
@@ -87,8 +115,17 @@ namespace PdfQualityCompare
         public const string Usage =
 @"PdfQualityCompare - compare the quality of PDF conversion runs (Apryse SDK).
 
-Every root is expected to hold one sub-folder per source document, with the same
-folder names in each root, each containing the converted PDF (default 'pdf.pdf').
+Two root layouts are read, and which one is in use is worked out from the roots
+themselves unless --mode says:
+
+  qualitron   One sub-folder per source document, named after it, each holding the
+              converted PDF under a fixed name (--pdf-name, default 'pdf.pdf').
+  flat        The PDFs sit directly in the root, each named after its own source
+              document. 042013.pdf in each root is then one document.
+
+Either way the same document names must appear in every root. A root with any
+sub-folder holding a PDF reads as qualitron, otherwise one with PDFs directly in
+it reads as flat; pass --mode where that guess is wrong.
 
 --candidate may be given more than once. Each candidate is compared against the one
 reference and gets its own report; a combined index across all of them is written
@@ -106,8 +143,10 @@ Required:
 Options:
   --out, -o <dir>         Report output directory (default: .\pdf-quality-report).
                           With several candidates each gets a sub-folder named after it.
+  --mode <qualitron|flat> Root layout (default: detect it from the roots).
   --pdf-name <name>       PDF file name inside each document folder (default: pdf.pdf).
-  --filter <text>         Only compare folders whose name contains <text>.
+                          Qualitron mode only; flat mode takes each PDF's own name.
+  --filter <text>         Only compare documents whose name contains <text>.
   --limit <n>             Compare at most n documents.
   --threads <n>           Worker threads (default: CPU count - 1).
   --layout-tolerance <pt> Residual line displacement counted as misplaced (default: 3.0).
@@ -121,7 +160,7 @@ Options:
   --visual-threshold <n>  Grey delta 0-255 counted as a pixel difference (default: 32).
   --max-hunks <n>         Text difference hunks kept per document (default: 40).
   --weights t,l,f,p       Overall score weights for text, layout, font, page (default 0.30,0.25,0.25,0.20).
-  --explain <folder>      Diagnose one document (name or unique prefix) and print why it scored as it did.
+  --explain <name>        Diagnose one document (name or unique prefix) and print why it scored as it did.
   --ref-label <text>      Name for the reference run (default: its root folder name).
   --cand-label <text>     Name for the candidate it follows on the command line
                           (default: that candidate's root folder name).
@@ -176,6 +215,8 @@ Examples:
                     case "--out":
                     case "-o":
                         o.OutputDir = Next(args, ref i, ref error); break;
+                    case "--mode":
+                        ParseMode(Next(args, ref i, ref error), o, ref error); break;
                     case "--pdf-name":
                         o.PdfName = Next(args, ref i, ref error); break;
                     case "--filter":
@@ -249,6 +290,8 @@ Examples:
             }
             MakeLabelsUnique(o.Candidates);
 
+            if (o.ModeDetected && !DetectMode(o, ref error)) return null;
+
             if (string.IsNullOrEmpty(o.OutputDir))
                 o.OutputDir = Path.Combine(Environment.CurrentDirectory, "pdf-quality-report");
             o.OutputDir = Path.GetFullPath(o.OutputDir);
@@ -267,6 +310,92 @@ Examples:
             o.CandidateLabel = o.Candidates[0].Label;
 
             return o;
+        }
+
+        private static void ParseMode(string text, Options o, ref string error)
+        {
+            if (text == null) return;
+            switch (text.ToLowerInvariant())
+            {
+                case "qualitron": o.Mode = LayoutMode.Qualitron; break;
+                case "flat": o.Mode = LayoutMode.Flat; break;
+                default:
+                    error = "--mode must be qualitron or flat, not " + text;
+                    return;
+            }
+            o.ModeDetected = false;
+        }
+
+        /// <summary>
+        /// Works the layout out from the roots, so neither tree shape needs a flag in the
+        /// ordinary case. One mode covers the whole run: a document is identified by its
+        /// folder name in one layout and by its file name in the other, and roots that
+        /// disagree would pair nothing at all - which is worth saying plainly rather than
+        /// reporting as a hundred missing conversions.
+        /// </summary>
+        private static bool DetectMode(Options o, ref string error)
+        {
+            LayoutMode? agreed = null;
+            string agreedBy = null;
+
+            var roots = new List<KeyValuePair<string, string>>
+            {
+                new KeyValuePair<string, string>(o.ReferenceLabel, o.ReferenceRoot)
+            };
+            foreach (CandidateRun c in o.Candidates)
+                roots.Add(new KeyValuePair<string, string>(c.Label, c.Root));
+
+            foreach (KeyValuePair<string, string> root in roots)
+            {
+                LayoutMode? seen = Detect(root.Value);
+                if (seen == null) continue;          // nothing in it to go on; let the others say
+                if (agreed == null) { agreed = seen; agreedBy = root.Key; continue; }
+                if (agreed != seen)
+                {
+                    error = "The roots are not laid out the same way: " + agreedBy + " looks like " +
+                            Describe(agreed.Value) + " and " + root.Key + " looks like " +
+                            Describe(seen.Value) + ". Pass --mode to say which to read them as.";
+                    return false;
+                }
+            }
+
+            // Every root was empty of PDFs. Qualitron is the historical default, and the
+            // run is about to report that it found nothing to compare either way.
+            o.Mode = agreed ?? LayoutMode.Qualitron;
+            return true;
+        }
+
+        /// <summary>
+        /// Documents in sub-folders win over PDFs lying in the root, because a benchmark
+        /// tree regularly carries a stray report PDF beside the document folders and that
+        /// should not make it read as a flat folder. A flat root that happens to hold a
+        /// sub-folder of PDFs is the case this gets wrong, and --mode is the answer to it.
+        /// </summary>
+        private static LayoutMode? Detect(string root)
+        {
+            try
+            {
+                foreach (string d in Directory.GetDirectories(root))
+                    if (HasPdf(d)) return LayoutMode.Qualitron;
+                return HasPdf(root) ? LayoutMode.Flat : (LayoutMode?)null;
+            }
+            catch (Exception)
+            {
+                return null;    // unreadable roots are reported by discovery, not here
+            }
+        }
+
+        private static bool HasPdf(string dir)
+        {
+            try { return Directory.GetFiles(dir, "*.pdf", SearchOption.TopDirectoryOnly).Length > 0; }
+            catch (Exception) { return false; }
+        }
+
+        public static string Describe(LayoutMode mode)
+        {
+            return mode == LayoutMode.Flat
+                ? "flat (PDFs directly in the root)"
+                : "qualitron (one folder per document)";
         }
 
         /// <summary>This configuration narrowed to the single comparison against <paramref name="c"/>.</summary>
