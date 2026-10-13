@@ -201,7 +201,7 @@ namespace PdfQualityCompare
             ReviewScore s = review.Score;
             return "{\"total\":" + s.Total + ",\"candidateOnly\":" + s.CandidateOnly +
                    ",\"referenceOnly\":" + s.ReferenceOnly + ",\"neither\":" + s.Neither +
-                   ",\"both\":" + s.Both + ",\"recheck\":" + s.Recheck + ",\"pending\":" + s.Pending +
+                   ",\"both\":" + s.Both + ",\"recheck\":" + s.Recheck + ",\"unsure\":" + s.Unsure + ",\"pending\":" + s.Pending +
                    ",\"text\":" + Js(ReviewSet.Describe(review)) + "}";
         }
 
@@ -686,6 +686,7 @@ tbody tr:hover{background:var(--panel)}
       <option value=""reference"">Correct in reference only</option>
       <option value=""neither"">Wrong in both</option>
       <option value=""both"">Now correct in both</option>
+      <option value=""unsure"">Don't know</option>
     </select>
     <span class=""pill"" id=""revcount""></span>
   </div>
@@ -960,13 +961,14 @@ const BUCKETS = {
   neither: ['wrong in both', 'var(--bad)'],
   both: ['now correct in both', '#5aa36f'],
   recheck: ['read differently since judged — recheck', 'var(--warn)'],
+  unsure: [""don't know"", '#8a8f98'],
   pending: ['not judged yet', 'var(--line)']
 };
 
 function renderScore() {
   const s = REV.score;
   const parts = [['candidate', s.candidateOnly], ['reference', s.referenceOnly], ['neither', s.neither],
-                 ['both', s.both], ['recheck', s.recheck], ['pending', s.pending]];
+                 ['both', s.both], ['unsure', s.unsure], ['recheck', s.recheck], ['pending', s.pending]];
   document.getElementById('revscore').innerHTML =
     '<div class=""score"">' + esc(s.text) + '</div>' +
     '<div class=""scorebar"">' + parts.filter(p => p[1]).map(p =>
@@ -999,6 +1001,8 @@ function itemCard(it) {
     readingRow(it, REF) + readingRow(it, CAND) +
     '<div class=""neither""><button data-n=""' + it.number + '"" data-v=""neither"" class=""' + neitherOn + '""' + (live ? '' : ' disabled') +
       '>Both wrong</button>' +
+      '<button data-n=""' + it.number + '"" data-v=""unsure"" class=""' + (it.verdict === 'unsure' ? ' on' : '') + '""' + (live ? '' : ' disabled') +
+      ' title=""It is unclear what the difference is - an artefact, a space - so it counts for neither engine"">Don&rsquo;t know</button>' +
       '<input data-truth=""' + it.number + '"" placeholder=""correct text (optional)"" value=""' +
         escA(it.verdict === 'neither' ? (it.truth ?? '') : '') + '""' + (live ? '' : ' disabled') + '>' +
       (it.verdict ? '<button data-n=""' + it.number + '"" data-v=""""' + (live ? '' : ' disabled') + '>Clear</button>' : '') +
@@ -1023,7 +1027,8 @@ function renderReview() {
     REV.items.length + ' of up to ' + REV.sampleSize + ' differences, picked at random and repeatably' +
     (REV.picked ? ' (' + REV.picked + ' new in this run)' : '') + '. ' +
     (REV.baseline ? 'Verdicts are kept in <code>' + esc(REV.baseline) + '</code>. ' : 'No baseline file was given, so verdicts cannot be kept. ') +
-    (live ? 'Pick the engine that read the scan correctly, or <i>Both wrong</i> - type the correct text if you can, so later runs are graded without asking again.'
+    (live ? 'Pick the engine that read the scan correctly, or <i>Both wrong</i> - type the correct text if you can, so later runs are graded without asking again. ' +
+            'Use <i>Don&rsquo;t know</i> when it is unclear what the difference is; those count for neither engine.'
           : 'Run with <code>--review</code> to record verdicts here.') +
     (REV.error ? ' <span class=""b"">Not all written: ' + esc(REV.error) + '</span>' : '');
   renderScore();

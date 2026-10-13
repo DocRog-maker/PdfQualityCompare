@@ -134,8 +134,10 @@ PdfQualityCompare.exe -r ocr\nutrient -c ocr\apryse -o C:\reports\ocr --ocr --ig
   in the report; the rest are shown as before.
 - **`--review` serves the report on `127.0.0.1`** after the run and opens it. Each item shows a
   crop of the scan with the disputed words boxed, what each engine read there, and buttons:
-  *nutrient is right*, *apryse is right*, or *Both wrong* with an optional box for the correct
-  text. Every click is saved to the `--baseline` file at once. Ctrl+C stops the server. Opened
+  *nutrient is right*, *apryse is right*, *Both wrong* with an optional box for the correct
+  text, or *Don't know* when it is unclear what the difference is - an artefact the ignore
+  list missed, a space. *Don't know* items are counted on their own and favour neither
+  engine. Items are listed in page order, top to bottom, and new picks are numbered that way. Every click is saved to the `--baseline` file at once. Ctrl+C stops the server. Opened
   as a file, the report shows the same sample read-only.
 - **The score** is reported as *Of the 100: 63 correct in apryse only, 5 correct in nutrient
   only, 32 wrong in both*, in the console, at the top of the report, and in `review.csv`.

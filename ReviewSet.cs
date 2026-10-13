@@ -23,6 +23,8 @@ namespace PdfQualityCompare
         public int Both;
         /// <summary>Judged, but a run now reads something the verdict cannot grade.</summary>
         public int Recheck;
+        /// <summary>Judged "don't know": what differs is unclear - an artefact, a space.</summary>
+        public int Unsure;
         /// <summary>Not judged yet.</summary>
         public int Pending;
     }
@@ -70,6 +72,12 @@ namespace PdfQualityCompare
         public const string Neither = "neither";
         public const string Both = "both";
         public const string Recheck = "recheck";
+        /// <summary>
+        /// A verdict, and the bucket it puts an item in: the person could not tell what the
+        /// difference is - an artefact the ignore list missed, a space, a smudge. Counted on
+        /// its own, so it neither props up nor drags down either engine.
+        /// </summary>
+        public const string Unsure = "unsure";
 
         /// <summary>See <see cref="OcrPageWords.AreaMargin"/>.</summary>
         private const double AreaMargin = OcrPageWords.AreaMargin;
@@ -117,7 +125,7 @@ namespace PdfQualityCompare
             Pick(state, docs, options);
 
             foreach (ReviewItem item in state.Items) Grade(state, item);
-            state.Items.Sort((a, b) => a.Number.CompareTo(b.Number));
+            state.Items.Sort(PageOrder);
             state.Score = Tally(state);
 
             RenderCrops(state, docs);
@@ -232,11 +240,21 @@ namespace PdfQualityCompare
                 KeyValuePair<DocResult, OcrHighlightDiff> t = pool[i]; pool[i] = pool[j]; pool[j] = t;
             }
 
-            string now = DateTime.Now.ToString("yyyy-MM-ddTHH:mm:ss", CultureInfo.InvariantCulture);
-            for (int i = 0; i < Math.Min(wanted, pool.Count); i++)
+            // Picked at random, then put in page order before numbering, so the numbers
+            // run down the document the way the items are reviewed.
+            List<KeyValuePair<DocResult, OcrHighlightDiff>> picked = pool.GetRange(0, Math.Min(wanted, pool.Count));
+            picked.Sort((x, y) =>
             {
-                DocResult doc = pool[i].Key;
-                OcrHighlightDiff h = pool[i].Value;
+                int byDoc = string.Compare(x.Key.Name, y.Key.Name, StringComparison.OrdinalIgnoreCase);
+                if (byDoc != 0) return byDoc;
+                return PageOrder(x.Value.AreaPage, x.Value.X1, x.Value.Y2, y.Value.AreaPage, y.Value.X1, y.Value.Y2);
+            });
+
+            string now = DateTime.Now.ToString("yyyy-MM-ddTHH:mm:ss", CultureInfo.InvariantCulture);
+            foreach (KeyValuePair<DocResult, OcrHighlightDiff> p in picked)
+            {
+                DocResult doc = p.Key;
+                OcrHighlightDiff h = p.Value;
 
                 var item = new ReviewItem
                 {
@@ -262,12 +280,30 @@ namespace PdfQualityCompare
             }
         }
 
+        /// <summary>Document, page, then down the page and across it - the order items are reviewed in.</summary>
+        private static int PageOrder(ReviewItem a, ReviewItem b)
+        {
+            int byDoc = string.Compare(a.Document, b.Document, StringComparison.OrdinalIgnoreCase);
+            if (byDoc != 0) return byDoc;
+            int byPlace = PageOrder(a.Page, a.X1, a.Y2, b.Page, b.X1, b.Y2);
+            return byPlace != 0 ? byPlace : a.Number.CompareTo(b.Number);
+        }
+
+        /// <summary>Page coordinates run up the page, so higher tops come first; within a few points they are one line.</summary>
+        private static int PageOrder(int pageA, double leftA, double topA, int pageB, double leftB, double topB)
+        {
+            if (pageA != pageB) return pageA.CompareTo(pageB);
+            if (Math.Abs(topA - topB) > 4.0) return topB.CompareTo(topA);
+            return leftA.CompareTo(leftB);
+        }
+
         // ----------------------------------------------------------------- grading
 
         /// <summary>Sorts an item into its bucket from what each run reads now.</summary>
         public static void Grade(ReviewState state, ReviewItem item)
         {
             if (item.Verdict == null) { item.Bucket = Pending; return; }
+            if (item.Verdict == Unsure) { item.Bucket = Unsure; return; }
 
             bool? reference = Judge(item, Reading(item, state.ReferenceLabel));
             bool? candidate = Judge(item, Reading(item, state.CandidateLabel));
@@ -310,6 +346,7 @@ namespace PdfQualityCompare
                     case Neither: s.Neither++; break;
                     case Both: s.Both++; break;
                     case Recheck: s.Recheck++; break;
+                    case Unsure: s.Unsure++; break;
                     default: s.Pending++; break;
                 }
             }
@@ -325,14 +362,15 @@ namespace PdfQualityCompare
                 s.Total, s.CandidateOnly, state.CandidateLabel, s.ReferenceOnly, state.ReferenceLabel, s.Neither);
             var extra = new List<string>();
             if (s.Both > 0) extra.Add(s.Both + " now correct in both");
+            if (s.Unsure > 0) extra.Add(s.Unsure + " don't know");
             if (s.Recheck > 0) extra.Add(s.Recheck + " read differently since judged - recheck");
             if (s.Pending > 0) extra.Add(s.Pending + " not judged yet");
             return extra.Count == 0 ? text : text + "; " + string.Join(", ", extra.ToArray());
         }
 
         /// <summary>
-        /// Records a verdict: <paramref name="verdict"/> is a run label, "neither", or empty to
-        /// clear it. The verdict is stored as the correct text, which is what grades later
+        /// Records a verdict: <paramref name="verdict"/> is a run label, "neither", "unsure",
+        /// or empty to clear it. The verdict is stored as the correct text, which is what grades later
         /// runs - a run label alone would mean nothing once that run's output has changed.
         /// </summary>
         /// <returns>Null on success, otherwise why it was refused.</returns>
@@ -357,6 +395,13 @@ namespace PdfQualityCompare
                 item.Truth = verdict == state.ReferenceLabel ? reference : candidate;
                 AddWrong(item, verdict == state.ReferenceLabel ? candidate : reference);
                 item.Verdict = verdict;
+            }
+            else if (verdict == Unsure)
+            {
+                // Nothing to grade a later run against: no correct text, no wrong reading.
+                item.Truth = null;
+                item.Wrong.Clear();
+                item.Verdict = Unsure;
             }
             else if (verdict == Neither)
             {
