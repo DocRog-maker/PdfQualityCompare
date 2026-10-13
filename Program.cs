@@ -111,6 +111,18 @@ namespace PdfQualityCompare
             }
 
             if (many) WriteCombinedReports(outcomes, options);
+
+            if (options.Review)
+            {
+                CandidateOutcome o = outcomes[0];
+                if (o.Review == null)
+                {
+                    Console.Error.WriteLine("Nothing to review: no document was compared.");
+                    return 4;
+                }
+                ReviewServer.Serve(o.Review, o.ReportPath, options.ReviewPort,
+                                   () => WriteReports(o.Results, o.Options, o.Review));
+            }
             return 0;
         }
 
@@ -200,11 +212,15 @@ namespace PdfQualityCompare
             string json = Path.Combine(options.OutputDir, "details.json");
             string html = Path.Combine(options.OutputDir, "report.html");
 
-            ReportWriter.WriteCsv(list, csv);
-            ReportWriter.WriteJson(list, options, json);
-            ReportWriter.WriteHtml(list, options, html);
+            // After every document is in: the sample is drawn from the whole run.
+            ReviewState review = null;
+            if (options.Ocr && options.Annotations && options.Sample > 0)
+                review = ReviewSet.Build(list, options, options.OutputDir);
+
+            WriteReports(list, options, review);
 
             PrintSummary(list, options);
+            if (review != null) PrintReview(review);
 
             Console.WriteLine();
             if (diffsDir != null)
@@ -222,10 +238,40 @@ namespace PdfQualityCompare
             Console.WriteLine("Report  : {0}", html);
             Console.WriteLine("CSV     : {0}", csv);
             Console.WriteLine("Details : {0}", json);
+            if (review != null && review.Items.Count > 0)
+                Console.WriteLine("Review  : {0}", Path.Combine(options.OutputDir, "review.csv"));
 
             outcome.Results = list;
+            outcome.Review = review;
+            outcome.Options = options;
             outcome.ReportPath = html;
             return outcome;
+        }
+
+        /// <summary>Everything written for one candidate; again after each verdict under --review.</summary>
+        private static void WriteReports(List<DocResult> list, Options options, ReviewState review)
+        {
+            ReportWriter.WriteCsv(list, Path.Combine(options.OutputDir, "summary.csv"));
+            ReportWriter.WriteJson(list, options, Path.Combine(options.OutputDir, "details.json"), review);
+            ReportWriter.WriteHtml(list, options, Path.Combine(options.OutputDir, "report.html"), review);
+            if (review != null && review.Items.Count > 0)
+                ReportWriter.WriteReviewCsv(review, Path.Combine(options.OutputDir, "review.csv"));
+        }
+
+        private static void PrintReview(ReviewState review)
+        {
+            Console.WriteLine();
+            Console.WriteLine("--- review sample -------------------------------------------");
+            if (review.Items.Count == 0)
+            {
+                Console.WriteLine("No differences to sample.");
+                return;
+            }
+            Console.WriteLine("{0} item(s): {1} carried over from the baseline, {2} picked in this run{3}",
+                review.Items.Count, review.Items.Count - review.Picked, review.Picked,
+                string.IsNullOrEmpty(review.BaselinePath) ? " (no --baseline, so they are not kept)" : "");
+            Console.WriteLine(ReviewSet.Describe(review));
+            if (review.Error != null) Console.WriteLine("Not all written: {0}", review.Error);
         }
 
         // ------------------------------------------------- across the candidates

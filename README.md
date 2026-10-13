@@ -118,6 +118,51 @@ things change:
 `--ignore-text` works without `--ocr` too. The phrase is matched as consecutive words on one
 page, normalised like everything else, so case does not matter.
 
+### Judging a sample, and keeping it as a baseline
+
+Counting differences says how often two engines disagree, not which of them is right. For
+that a person has to look, so `--ocr` picks a sample of the highlighted differences -
+`--sample`, 100 by default - for judging:
+
+```bash
+PdfQualityCompare.exe -r ocr\nutrient -c ocr\apryse -o C:\reports\ocr --ocr --ignore-text "Nutrient SDK Trial Version" --baseline C:\reports\ocr-baseline.json --review
+```
+
+- **The sample is random and repeatable.** The same documents always give the same picks,
+  and a random sample makes the score stand for the whole run rather than its first pages.
+  The picked differences are purple and numbered (`Review #17`) in the highlighted PDFs and
+  in the report; the rest are shown as before.
+- **`--review` serves the report on `127.0.0.1`** after the run and opens it. Each item shows a
+  crop of the scan with the disputed words boxed, what each engine read there, and buttons:
+  *nutrient is right*, *apryse is right*, or *Both wrong* with an optional box for the correct
+  text. Every click is saved to the `--baseline` file at once. Ctrl+C stops the server. Opened
+  as a file, the report shows the same sample read-only.
+- **The score** is reported as *Of the 100: 63 correct in apryse only, 5 correct in nutrient
+  only, 32 wrong in both*, in the console, at the top of the report, and in `review.csv`.
+
+A verdict is stored as the correct text of the area, not as the name of an engine, and each
+item is remembered by **where it is** - document, page and a tight box around the words the
+engines disagreed on - and **what was read there**, never by the comparison's own IDs, which
+change from run to run. A later run with the same `--baseline`:
+
+- reads every item's box again in the new PDFs and grades each engine against the stored
+  text. This works whether or not a difference is still highlighted there, so an item whose
+  difference has disappeared is still counted - as *now correct in both*, or as *wrong in
+  both* when the engines now agree on the wrong text;
+- links each item to this run's highlight at the same place when there is one (overlapping
+  boxes, and similar text unless the boxes overlap almost completely), so it is marked in the
+  PDFs and not picked a second time;
+- picks new items only to top the sample back up to `--sample`; earlier verdicts are never
+  asked for again.
+
+An item judged *both wrong* without the correct text can only grade readings already judged
+wrong. If an engine later reads something new there, the item is reported as *read
+differently since judged - recheck*; judging it again from the report updates it.
+
+The baseline is a JSON file with one item to a line, so it diffs sensibly under version
+control. The `Readings` recorded when an item was picked are kept for reference; `Truth` and
+`Wrong` are what grading uses.
+
 ## Several candidates at once
 
 `--candidate` may be given more than once. Each candidate is compared against the same

@@ -15,6 +15,8 @@
     <!-- Apryse (PDFTron) SDK, restored from nuget.org so the repo stands on its own. -->
     <PackageReference Include="PDFTron.NetFramework.x64" Version="12.0.0" />
     <Reference Include="System.Drawing" />
+    <!-- JavaScriptSerializer, for the review baseline. -->
+    <Reference Include="System.Web.Extensions" />
   </ItemGroup>
 
   <!--

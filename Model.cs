@@ -205,6 +205,19 @@ namespace PdfQualityCompare
         public string Candidate;
         /// <summary>Words under the highlights with no same-text counterpart at the same place.</summary>
         public int DisagreedWords;
+
+        /// <summary>
+        /// The tight area of the difference - only the words the engines disagree on - in
+        /// page coordinates on <see cref="AreaPage"/> (one based, 0 when there was none).
+        /// </summary>
+        public int AreaPage;
+        public double X1, Y1, X2, Y2;
+        /// <summary>What each engine reads inside that area, without the context around it.</summary>
+        public string ReferenceExact = "";
+        public string CandidateExact = "";
+
+        /// <summary>The number of the review item this difference is, or 0 when it is not in the sample.</summary>
+        public int ReviewNumber;
     }
 
     /// <summary>The comparison of one document pair.</summary>
@@ -402,6 +415,12 @@ namespace PdfQualityCompare
 
         /// <summary>Worked out on demand by <see cref="Aggregate.For"/>, which caches it here.</summary>
         public Aggregate Summary;
+
+        /// <summary>The judged sample, under --ocr; null otherwise.</summary>
+        public ReviewState Review;
+
+        /// <summary>The options this candidate was compared under, for writing its report again.</summary>
+        public Options Options;
     }
 
     /// <summary>

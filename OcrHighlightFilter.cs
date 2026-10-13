@@ -63,8 +63,8 @@ namespace PdfQualityCompare
             Dictionary<string, List<DiffHighlights.Highlight>> onCandidate = DiffHighlights.Collect(candidate);
             if (onReference.Count == 0 && onCandidate.Count == 0) return outcome;
 
-            List<List<PageWord>> wordsA = Read(reference, options);
-            List<List<PageWord>> wordsB = Read(candidate, options);
+            List<List<PageWord>> wordsA = OcrPageWords.Read(reference, options);
+            List<List<PageWord>> wordsB = OcrPageWords.Read(candidate, options);
 
             var ids = new List<string>(onReference.Keys);
             foreach (string id in onCandidate.Keys) if (!onReference.ContainsKey(id)) ids.Add(id);
@@ -144,15 +144,6 @@ namespace PdfQualityCompare
             return true;
         }
 
-        /// <summary>One word of a text layer, in page coordinates so it lines up with the highlights.</summary>
-        private sealed class PageWord
-        {
-            public string Text;
-            public string Raw;
-            public double X1, Y1, X2, Y2;
-            public bool Ignored;
-        }
-
         /// <summary>
         /// Sorts out every word under one side's highlights: read the same at the same place
         /// by the other engine, part of an ignored phrase, or a genuine disagreement.
@@ -163,8 +154,8 @@ namespace PdfQualityCompare
             var seen = new HashSet<PageWord>();
             foreach (DiffHighlights.Highlight m in marks)
             {
-                List<PageWord> page = PageOf(own, m.Page);
-                List<PageWord> facing = PageOf(other, m.Page);
+                List<PageWord> page = OcrPageWords.PageOf(own, m.Page);
+                List<PageWord> facing = OcrPageWords.PageOf(other, m.Page);
 
                 foreach (PageWord w in page)
                 {
@@ -219,13 +210,50 @@ namespace PdfQualityCompare
             foreach (DiffHighlights.Highlight m in Concat(marksA, marksB))
                 if (page == 0 || m.Page < page) page = m.Page;
 
-            return new OcrHighlightDiff
+            var diff = new OcrHighlightDiff
             {
                 Id = id,
                 Page = page,
-                Reference = Read(spots, wordsA),
-                Candidate = Read(spots, wordsB)
+                Reference = ReadSpots(spots, wordsA),
+                Candidate = ReadSpots(spots, wordsB)
             };
+            SetArea(diff, focus, marksA, marksB, wordsA, wordsB);
+            return diff;
+        }
+
+        /// <summary>
+        /// The tight area of a difference - just the words the engines disagree on, on the
+        /// first page they appear - and what each engine reads inside it. This is what a
+        /// review baseline remembers: the same area can be read again in a later run, whether
+        /// or not the comparison still highlights anything there.
+        /// </summary>
+        private static void SetArea(OcrHighlightDiff diff, List<Spot> focus,
+                                    List<DiffHighlights.Highlight> marksA, List<DiffHighlights.Highlight> marksB,
+                                    List<List<PageWord>> wordsA, List<List<PageWord>> wordsB)
+        {
+            var areas = new List<Spot>(focus);
+            if (areas.Count == 0)
+                foreach (DiffHighlights.Highlight m in Concat(marksA, marksB))
+                    foreach (Rect q in m.Quads)
+                        areas.Add(new Spot { Page = m.Page, X1 = q.x1, Y1 = q.y1, X2 = q.x2, Y2 = q.y2 });
+            if (areas.Count == 0) return;
+
+            int page = int.MaxValue;
+            foreach (Spot a in areas) page = Math.Min(page, a.Page);
+
+            double x1 = double.MaxValue, y1 = double.MaxValue, x2 = double.MinValue, y2 = double.MinValue;
+            foreach (Spot a in areas)
+            {
+                if (a.Page != page) continue;
+                x1 = Math.Min(x1, a.X1); y1 = Math.Min(y1, a.Y1);
+                x2 = Math.Max(x2, a.X2); y2 = Math.Max(y2, a.Y2);
+            }
+
+            diff.AreaPage = page;
+            diff.X1 = Math.Round(x1, 2); diff.Y1 = Math.Round(y1, 2);
+            diff.X2 = Math.Round(x2, 2); diff.Y2 = Math.Round(y2, 2);
+            diff.ReferenceExact = OcrPageWords.ReadArea(wordsA, page, x1, y1, x2, y2, OcrPageWords.AreaMargin);
+            diff.CandidateExact = OcrPageWords.ReadArea(wordsB, page, x1, y1, x2, y2, OcrPageWords.AreaMargin);
         }
 
         private static IEnumerable<DiffHighlights.Highlight> Concat(List<DiffHighlights.Highlight> a,
@@ -268,7 +296,7 @@ namespace PdfQualityCompare
         }
 
         /// <summary>One document's words inside the areas, area by area, each read top down and left to right.</summary>
-        private static string Read(List<Spot> spots, List<List<PageWord>> pages)
+        private static string ReadSpots(List<Spot> spots, List<List<PageWord>> pages)
         {
             var parts = new List<string>();
             var taken = new HashSet<PageWord>();
@@ -276,7 +304,7 @@ namespace PdfQualityCompare
             foreach (Spot s in spots)
             {
                 var inside = new List<PageWord>();
-                foreach (PageWord w in PageOf(pages, s.Page))
+                foreach (PageWord w in OcrPageWords.PageOf(pages, s.Page))
                 {
                     if (w.Ignored || taken.Contains(w)) continue;
                     double cx = (w.X1 + w.X2) / 2, cy = (w.Y1 + w.Y2) / 2;
@@ -287,7 +315,7 @@ namespace PdfQualityCompare
                 if (inside.Count == 0) continue;
 
                 var sb = new StringBuilder();
-                foreach (PageWord w in InReadingOrder(inside))
+                foreach (PageWord w in OcrPageWords.InReadingOrder(inside))
                 {
                     if (sb.Length > 0) sb.Append(' ');
                     sb.Append(w.Raw);
@@ -295,38 +323,6 @@ namespace PdfQualityCompare
                 parts.Add(sb.ToString());
             }
             return string.Join(" \u2026 ", parts.ToArray());
-        }
-
-        /// <summary>
-        /// Top down and left to right. Words join a line when their middle is within half a
-        /// word's height of the line's, rather than by a fixed band, because an engine that
-        /// boxes a "Jj" taller than its neighbours would otherwise start a line of its own.
-        /// </summary>
-        private static List<PageWord> InReadingOrder(List<PageWord> words)
-        {
-            var byHeight = new List<PageWord>(words);
-            byHeight.Sort((x, y) => (y.Y1 + y.Y2).CompareTo(x.Y1 + x.Y2));
-
-            var lines = new List<List<PageWord>>();
-            double lineMiddle = 0;
-            foreach (PageWord w in byHeight)
-            {
-                double middle = (w.Y1 + w.Y2) / 2;
-                if (lines.Count == 0 || lineMiddle - middle > (w.Y2 - w.Y1) / 2)
-                {
-                    lines.Add(new List<PageWord>());
-                    lineMiddle = middle;
-                }
-                lines[lines.Count - 1].Add(w);
-            }
-
-            var ordered = new List<PageWord>(words.Count);
-            foreach (List<PageWord> line in lines)
-            {
-                line.Sort((x, y) => x.X1.CompareTo(y.X1));
-                ordered.AddRange(line);
-            }
-            return ordered;
         }
 
         private static string Show(string reading)
@@ -351,59 +347,6 @@ namespace PdfQualityCompare
                         failure = "note on page " + m.Page + ": " + ex.Message;
                 }
             }
-        }
-
-        /// <summary>
-        /// Every word of the document by page, read the way the feature extractor reads them -
-        /// punctuation split off and normalised - so a difference is judged on the same
-        /// tokens the metrics count.
-        /// </summary>
-        private static List<List<PageWord>> Read(PDFDoc doc, Options options)
-        {
-            var pages = new List<List<PageWord>>();
-            int count = doc.GetPageCount();
-
-            using (var te = new TextExtractor())
-            {
-                for (int p = 1; p <= count; p++)
-                {
-                    var words = new List<PageWord>();
-                    pages.Add(words);
-
-                    Page page = doc.GetPage(p);
-                    if (page == null || !page.IsValid()) continue;
-
-                    try { te.Begin(page, null, TextExtractor.ProcessingFlags.e_punct_break); }
-                    catch (Exception) { te.Begin(page); }
-
-                    for (TextExtractor.Line line = te.GetFirstLine(); line.IsValid(); line = line.GetNextLine())
-                        for (TextExtractor.Word word = line.GetFirstWord(); word.IsValid(); word = word.GetNextWord())
-                        {
-                            string raw = word.GetString();
-                            string token = TextNormalizer.NormalizeWord(raw, options);
-                            if (token.Length == 0) continue;
-
-                            Rect bb = word.GetBBox();
-                            bb.Normalize();
-                            words.Add(new PageWord { Text = token, Raw = raw, X1 = bb.x1, Y1 = bb.y1, X2 = bb.x2, Y2 = bb.y2 });
-                        }
-
-                    if (options.IgnorePhrases.Count > 0)
-                    {
-                        var tokens = new List<string>(words.Count);
-                        foreach (PageWord w in words) tokens.Add(w.Text);
-                        bool[] ignored = IgnoredText.Mark(tokens, options.IgnorePhrases);
-                        for (int i = 0; i < words.Count; i++) words[i].Ignored = ignored[i];
-                    }
-                }
-            }
-            return pages;
-        }
-
-        private static List<PageWord> PageOf(List<List<PageWord>> pages, int oneBased)
-        {
-            int i = oneBased - 1;
-            return i >= 0 && i < pages.Count ? pages[i] : new List<PageWord>();
         }
 
         /// <summary>Whether a word's centre falls inside one of the areas a highlight marks.</summary>

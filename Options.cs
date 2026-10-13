@@ -98,6 +98,18 @@ namespace PdfQualityCompare
         /// <summary><see cref="IgnoreText"/> split into normalised tokens, once the case options are known.</summary>
         public List<string[]> IgnorePhrases = new List<string[]>();
 
+        /// <summary>How many OCR differences make up the sample a person judges (--ocr).</summary>
+        public int Sample = 100;
+
+        /// <summary>The file the judged sample is kept in between runs; null to judge nothing.</summary>
+        public string BaselinePath;
+
+        /// <summary>Serve the report locally after the run, with buttons to record verdicts.</summary>
+        public bool Review;
+
+        /// <summary>Port for --review; 0 picks a free one.</summary>
+        public int ReviewPort;
+
         /// <summary>Run the Apryse text comparison and count the highlight annotations it adds.</summary>
         public bool Annotations = true;
 
@@ -176,6 +188,15 @@ Options:
                           words in the same place.
   --ignore-text <phrase>  Ignore this phrase on both sides, e.g. a trial watermark.
                           Repeatable.
+  --sample <n>            With --ocr: how many differences to pick at random for a
+                          person to judge (default 100).
+  --baseline <file>       With --ocr: where the judged sample is kept. Carried-over
+                          items are graded against their verdicts; new picks top the
+                          sample up to --sample and are added to the file.
+  --review                With --ocr and --baseline: after the run, serve the report on
+                          this machine with buttons to record verdicts, saved to the
+                          baseline as you go. Ctrl+C to stop.
+  --review-port <n>       Port for --review (default: any free one).
   --no-annotations        Skip the Apryse HighlightTextDiff pass, so no annotation counts
                           are reported and no highlighted PDFs are written.
   --highlight-moves       Let that comparison also highlight moved text (counts moves as differences).
@@ -257,6 +278,14 @@ Examples:
                         o.IgnorePunctuation = true; break;
                     case "--ocr":
                         o.Ocr = true; break;
+                    case "--sample":
+                        o.Sample = Math.Max(0, NextInt(args, ref i, ref error)); break;
+                    case "--baseline":
+                        o.BaselinePath = Next(args, ref i, ref error); break;
+                    case "--review":
+                        o.Review = true; break;
+                    case "--review-port":
+                        o.ReviewPort = NextInt(args, ref i, ref error); break;
                     case "--ignore-text":
                     {
                         string phrase = Next(args, ref i, ref error);
@@ -332,6 +361,19 @@ Examples:
                 if (tokens.Length == 0) { error = "--ignore-text \"" + phrase + "\" has no words in it."; return null; }
                 o.IgnorePhrases.Add(tokens);
             }
+
+            if (!o.Ocr && (o.Review || o.BaselinePath != null))
+            {
+                error = "--baseline and --review judge OCR differences, so they need --ocr.";
+                return null;
+            }
+            if (o.Review && (o.BaselinePath == null || o.Candidates.Count != 1 || !o.Annotations))
+            {
+                error = "--review needs --baseline to save verdicts to, a single --candidate, and the text diff " +
+                        "(not --no-annotations), which is where the differences come from.";
+                return null;
+            }
+            if (o.BaselinePath != null) o.BaselinePath = Path.GetFullPath(o.BaselinePath);
 
             // An OCR text layer is drawn invisibly in whatever font the engine chose, so
             // the font score would only measure that choice. Its weight goes to the rest.

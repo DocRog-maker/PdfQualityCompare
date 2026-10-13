@@ -165,12 +165,77 @@ namespace PdfQualityCompare
 
         // ----------------------------------------------------------------- JSON
 
-        public static void WriteJson(List<DocResult> results, Options options, string path)
+        public static void WriteJson(List<DocResult> results, Options options, string path, ReviewState review = null)
         {
-            File.WriteAllText(path, BuildJson(results, options), new UTF8Encoding(false));
+            File.WriteAllText(path, BuildJson(results, options, review), new UTF8Encoding(false));
         }
 
-        private static string BuildJson(List<DocResult> results, Options options)
+        /// <summary>The judged sample, one row per item, for your own analysis.</summary>
+        public static void WriteReviewCsv(ReviewState review, string path)
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine(string.Join(",", new[]
+            {
+                "number","document","page","x1","y1","x2","y2","status",
+                Q(review.ReferenceLabel), Q(review.CandidateLabel),
+                "verdict","correct_text","in_highlights","added","judged"
+            }));
+            foreach (ReviewItem item in review.Items)
+            {
+                string r, c;
+                item.Current.TryGetValue(review.ReferenceLabel, out r);
+                item.Current.TryGetValue(review.CandidateLabel, out c);
+                sb.AppendLine(string.Join(",", new[]
+                {
+                    I(item.Number), Q(item.Document), I(item.Page),
+                    N(item.X1), N(item.Y1), N(item.X2), N(item.Y2), Q(item.Bucket),
+                    Q(r), Q(c), Q(item.Verdict), Q(item.Truth), item.DiffId != null ? "1" : "0",
+                    Q(item.Added), Q(item.Judged)
+                }));
+            }
+            File.WriteAllText(path, sb.ToString(), new UTF8Encoding(true));
+        }
+
+        public static string ReviewScoreJson(ReviewState review)
+        {
+            ReviewScore s = review.Score;
+            return "{\"total\":" + s.Total + ",\"candidateOnly\":" + s.CandidateOnly +
+                   ",\"referenceOnly\":" + s.ReferenceOnly + ",\"neither\":" + s.Neither +
+                   ",\"both\":" + s.Both + ",\"recheck\":" + s.Recheck + ",\"pending\":" + s.Pending +
+                   ",\"text\":" + Js(ReviewSet.Describe(review)) + "}";
+        }
+
+        public static string ReviewItemJson(ReviewItem item)
+        {
+            var sb = new StringBuilder();
+            sb.Append("{\"number\":").Append(item.Number)
+              .Append(",\"document\":").Append(Js(item.Document))
+              .Append(",\"page\":").Append(item.Page)
+              .Append(",\"image\":").Append(Js(item.Image))
+              .Append(",\"current\":").Append(StringMap(item.Current))
+              .Append(",\"context\":").Append(StringMap(item.CurrentContext))
+              .Append(",\"verdict\":").Append(Js(item.Verdict))
+              .Append(",\"truth\":").Append(Js(item.Truth))
+              .Append(",\"bucket\":").Append(Js(item.Bucket))
+              .Append(",\"diffId\":").Append(Js(item.DiffId))
+              .Append(",\"isNew\":").Append(item.New ? "true" : "false")
+              .Append(",\"judged\":").Append(Js(item.Judged))
+              .Append('}');
+            return sb.ToString();
+        }
+
+        private static string StringMap(Dictionary<string, string> map)
+        {
+            var sb = new StringBuilder("{");
+            foreach (KeyValuePair<string, string> kv in map)
+            {
+                if (sb.Length > 1) sb.Append(',');
+                sb.Append(Js(kv.Key)).Append(':').Append(Js(kv.Value ?? ""));
+            }
+            return sb.Append('}').ToString();
+        }
+
+        private static string BuildJson(List<DocResult> results, Options options, ReviewState review)
         {
             var sb = new StringBuilder();
             sb.Append("{\"generated\":").Append(Js(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")));
@@ -199,6 +264,22 @@ namespace PdfQualityCompare
               .Append(",\"layout\":").Append(Jn(options.WeightLayout))
               .Append(",\"font\":").Append(Jn(options.WeightFont))
               .Append(",\"page\":").Append(Jn(options.WeightPage)).Append('}');
+            if (review == null) sb.Append(",\"review\":null");
+            else
+            {
+                sb.Append(",\"review\":{\"baseline\":").Append(Js(review.BaselinePath))
+                  .Append(",\"sampleSize\":").Append(review.SampleSize)
+                  .Append(",\"picked\":").Append(review.Picked)
+                  .Append(",\"error\":").Append(Js(review.Error))
+                  .Append(",\"score\":").Append(ReviewScoreJson(review))
+                  .Append(",\"items\":[");
+                for (int i = 0; i < review.Items.Count; i++)
+                {
+                    if (i > 0) sb.Append(',');
+                    sb.Append(ReviewItemJson(review.Items[i]));
+                }
+                sb.Append("]}");
+            }
             sb.Append(",\"documents\":[");
 
             for (int i = 0; i < results.Count; i++)
@@ -339,6 +420,7 @@ namespace PdfQualityCompare
                 sb.Append("{\"id\":").Append(Js(d.Id))
                   .Append(",\"page\":").Append(d.Page)
                   .Append(",\"words\":").Append(d.DisagreedWords)
+                  .Append(",\"review\":").Append(d.ReviewNumber)
                   .Append(",\"ref\":").Append(Js(Clip(d.Reference, 300)))
                   .Append(",\"cand\":").Append(Js(Clip(d.Candidate, 300)))
                   .Append('}');
@@ -439,9 +521,9 @@ namespace PdfQualityCompare
 
         // ----------------------------------------------------------------- HTML
 
-        public static void WriteHtml(List<DocResult> results, Options options, string path)
+        public static void WriteHtml(List<DocResult> results, Options options, string path, ReviewState review = null)
         {
-            string json = BuildJson(results, options);
+            string json = BuildJson(results, options, review);
             string html = HtmlTemplate.Replace("/*__DATA__*/null", json);
             File.WriteAllText(path, html, new UTF8Encoding(false));
         }
@@ -514,6 +596,36 @@ tbody tr:hover{background:var(--panel)}
 .hunk .c{background:var(--add);color:var(--addfg);padding:2px 5px;border-radius:4px;display:block;margin:2px 0}
 .empty{color:var(--muted);font-style:italic}
 .pill{display:inline-block;font-size:11px;border:1px solid var(--line);border-radius:10px;padding:0 8px;color:var(--muted)}
+/* The review sample: the differences picked for a person to judge. Purple, as in the PDFs. */
+:root{--rev:#7a4dff; --revbg:rgba(122,77,255,0.08)}
+@media (prefers-color-scheme: dark){ :root{--rev:#a98bff; --revbg:rgba(169,139,255,0.12)} }
+.hunk.sampled{border-left-color:var(--rev);background:var(--revbg)}
+.revtag{display:inline-block;font-size:11px;padding:0 6px;border-radius:4px;margin-right:6px;background:var(--rev);color:#fff}
+#review{margin-top:28px}
+#review h2{font-size:16px;margin:0 0 4px}
+.scorebar{display:flex;height:10px;border-radius:5px;overflow:hidden;background:var(--panel);border:1px solid var(--line);margin:8px 0 6px;max-width:640px}
+.scorebar span{display:block;height:100%}
+.legend{display:flex;flex-wrap:wrap;gap:4px 14px;font-size:12.5px;color:var(--muted);margin-bottom:12px}
+.legend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:5px;vertical-align:-1px}
+.items{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,460px),1fr));gap:12px}
+.item{border:1px solid var(--line);border-left:4px solid var(--rev);border-radius:8px;padding:10px 12px;background:var(--bg)}
+.item.judged{border-left-color:var(--line)}
+.item header{display:flex;justify-content:space-between;gap:8px;font-size:12.5px;color:var(--muted);margin-bottom:6px}
+.item header b{color:var(--fg)}
+.item img{display:block;max-width:100%;border:1px solid var(--line);border-radius:4px;margin:4px 0 8px;background:#fff}
+.reading{display:grid;grid-template-columns:auto 1fr auto;gap:6px 10px;align-items:center;font-size:13px;margin:4px 0}
+.reading .who{color:var(--muted);font-size:12px}
+.reading .txt{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:12.5px;word-break:break-word}
+.reading .ctx{color:var(--muted);font-size:11.5px;grid-column:2}
+.item button{font:inherit;font-size:12px;padding:3px 10px;border-radius:5px;border:1px solid var(--line);
+  background:var(--panel);color:var(--fg);cursor:pointer;white-space:nowrap}
+.item button:disabled{cursor:default;opacity:.55}
+.item button.on{background:var(--rev);border-color:var(--rev);color:#fff;opacity:1}
+.neither{display:flex;gap:6px;align-items:center;margin-top:6px;flex-wrap:wrap}
+.neither input{flex:1;min-width:160px;background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:5px;padding:3px 8px;font:inherit;font-size:12.5px}
+.status{font-size:12px;margin-top:6px}
+.b-candidate{color:var(--good)} .b-reference{color:var(--accent)} .b-neither{color:var(--bad)}
+.b-both{color:var(--good)} .b-recheck{color:var(--warn)} .b-pending{color:var(--muted)}
 @media (max-width:700px){ body{padding:16px} .wrap{overflow-x:auto} }
 </style>
 </head>
@@ -559,6 +671,26 @@ tbody tr:hover{background:var(--panel)}
   <th data-k=""p95Disp"">p95 shift</th>
   <th data-k=""visualDiffPct"" class=""pixel-count"">Pixels</th>
 </tr></thead><tbody id=""b""></tbody></table></div>
+
+<section id=""review"" hidden>
+  <h2>Review sample</h2>
+  <p class=""stripnote"" id=""revnote""></p>
+  <div id=""revscore""></div>
+  <div class=""controls"">
+    <select id=""revonly"">
+      <option value=""all"">All items</option>
+      <option value=""pending"">Not judged yet</option>
+      <option value=""judged"">Judged</option>
+      <option value=""recheck"">Read differently since judged</option>
+      <option value=""candidate"">Correct in candidate only</option>
+      <option value=""reference"">Correct in reference only</option>
+      <option value=""neither"">Wrong in both</option>
+      <option value=""both"">Now correct in both</option>
+    </select>
+    <span class=""pill"" id=""revcount""></span>
+  </div>
+  <div class=""items"" id=""revitems""></div>
+</section>
 
 <script>
 const DATA = /*__DATA__*/null;
@@ -619,7 +751,14 @@ function buildCards(set, includeFailed) {
 const renderCards = (id, cards) => document.getElementById(id).innerHTML = cards.map(c =>
   '<div class=""card""><div class=""v"">' + c[1] + '</div><div class=""l"">' + c[0] + (c[2] ? ' <span style=""opacity:.6"">' + c[2] + '</span>' : '') + '</div></div>').join('');
 
-renderCards('cards', buildCards(compared, true));
+const topCards = buildCards(compared, true);
+if (DATA.review && DATA.review.items.length) {
+  const s = DATA.review.score;
+  topCards.unshift(['<a href=""#review"">Review sample</a>',
+    s.candidateOnly + ' / ' + s.referenceOnly + ' / ' + s.neither,
+    DATA.candidateLabel + ' / ' + DATA.referenceLabel + ' / neither right, of ' + s.total + (s.pending ? ' (' + s.pending + ' to judge)' : '')]);
+}
+renderCards('cards', topCards);
 
 // Fonts that survived intact leave layout and text free to be judged on their own.
 if (fontMatched.length && !DATA.ocr) {
@@ -752,7 +891,9 @@ function detail(d) {
     html += '<h3>Highlighted differences (' + d.ocrHighlights.length + ')</h3>';
     if (!d.ocrHighlights.length) html += '<div class=""empty"">none left after the OCR check</div>';
     else html += d.ocrHighlights.map(h =>
-      '<div class=""hunk""><span class=""tag"">p' + h.page + ' &middot; ID ' + esc(h.id) + ' &middot; ' + h.words + ' word' + (h.words === 1 ? '' : 's') + '</span>' +
+      '<div class=""hunk' + (h.review ? ' sampled' : '') + '"">' +
+      (h.review ? '<a class=""revtag"" href=""#item-' + h.review + '"">Review #' + h.review + '</a>' : '') +
+      '<span class=""tag"">p' + h.page + ' &middot; ID ' + esc(h.id) + ' &middot; ' + h.words + ' word' + (h.words === 1 ? '' : 's') + '</span>' +
       '<span class=""r"">' + esc(DATA.referenceLabel) + ': ' + (h.ref ? esc(h.ref) : '<i>nothing</i>') + '</span>' +
       '<span class=""c"">' + esc(DATA.candidateLabel) + ': ' + (h.cand ? esc(h.cand) : '<i>nothing</i>') + '</span></div>').join('');
   }
@@ -805,6 +946,121 @@ document.querySelectorAll('th[data-k]').forEach(th => th.addEventListener('click
 document.getElementById('q').addEventListener('input', render);
 document.getElementById('only').addEventListener('change', render);
 render();
+
+// ------------------------------------------------------------ review sample
+// Read-only when opened as a file. Served by --review, the page finds /api and the
+// verdict buttons come on; each click is saved into the baseline straight away.
+const REV = DATA.review;
+let live = false;
+const REF = DATA.referenceLabel, CAND = DATA.candidateLabel;
+const escA = s => esc(s).replace(/""/g, '&quot;');
+const BUCKETS = {
+  candidate: ['correct in ' + CAND + ' only', 'var(--good)'],
+  reference: ['correct in ' + REF + ' only', 'var(--accent)'],
+  neither: ['wrong in both', 'var(--bad)'],
+  both: ['now correct in both', '#5aa36f'],
+  recheck: ['read differently since judged — recheck', 'var(--warn)'],
+  pending: ['not judged yet', 'var(--line)']
+};
+
+function renderScore() {
+  const s = REV.score;
+  const parts = [['candidate', s.candidateOnly], ['reference', s.referenceOnly], ['neither', s.neither],
+                 ['both', s.both], ['recheck', s.recheck], ['pending', s.pending]];
+  document.getElementById('revscore').innerHTML =
+    '<div class=""score"">' + esc(s.text) + '</div>' +
+    '<div class=""scorebar"">' + parts.filter(p => p[1]).map(p =>
+      '<span style=""width:' + (100 * p[1] / Math.max(1, s.total)) + '%;background:' + BUCKETS[p[0]][1] + '"" title=""' +
+      p[1] + ' ' + esc(BUCKETS[p[0]][0]) + '""></span>').join('') + '</div>' +
+    '<div class=""legend"">' + parts.map(p => '<span><i style=""background:' + BUCKETS[p[0]][1] + '""></i>' +
+      p[1] + ' ' + esc(BUCKETS[p[0]][0]) + '</span>').join('') + '</div>';
+}
+
+function readingRow(it, label) {
+  const txt = it.current[label] ?? '';
+  const ctx = it.context[label] ?? '';
+  const on = it.verdict === label ? ' on' : '';
+  return '<div class=""reading""><span class=""who"">' + esc(label) + '</span>' +
+    '<span class=""txt"">' + (txt ? esc(txt) : '<i>nothing</i>') + '</span>' +
+    '<button data-n=""' + it.number + '"" data-v=""' + escA(label) + '"" class=""' + on + '""' + (live ? '' : ' disabled') +
+      ' title=""' + escA(label) + ' read this correctly"">' + esc(label) + ' is right</button>' +
+    (ctx && ctx !== txt ? '<span class=""ctx"">' + esc(ctx) + '</span>' : '') + '</div>';
+}
+
+function itemCard(it) {
+  const b = BUCKETS[it.bucket] || BUCKETS.pending;
+  const neitherOn = it.verdict === 'neither' ? ' on' : '';
+  return '<div class=""item' + (it.verdict ? ' judged' : '') + '"" id=""item-' + it.number + '"">' +
+    '<header><span><b>#' + it.number + '</b> &middot; ' + esc(it.document) + ' p' + it.page +
+      (it.diffId ? ' &middot; ID ' + esc(it.diffId) : ' &middot; <span title=""The comparison no longer highlights a difference here; the area is still read and graded."">no longer highlighted</span>') +
+      (it.isNew ? ' &middot; new' : '') + '</span>' +
+    '<span class=""b-' + esc(it.bucket) + '"">' + esc(b[0]) + '</span></header>' +
+    (it.image ? '<img loading=""lazy"" alt=""scan around item ' + it.number + '"" src=""' + escA(it.image) + '"">' : '') +
+    readingRow(it, REF) + readingRow(it, CAND) +
+    '<div class=""neither""><button data-n=""' + it.number + '"" data-v=""neither"" class=""' + neitherOn + '""' + (live ? '' : ' disabled') +
+      '>Both wrong</button>' +
+      '<input data-truth=""' + it.number + '"" placeholder=""correct text (optional)"" value=""' +
+        escA(it.verdict === 'neither' ? (it.truth ?? '') : '') + '""' + (live ? '' : ' disabled') + '>' +
+      (it.verdict ? '<button data-n=""' + it.number + '"" data-v=""""' + (live ? '' : ' disabled') + '>Clear</button>' : '') +
+    '</div>' +
+    (it.verdict && it.verdict !== 'neither' && it.truth !== null ?
+      '<div class=""status"">correct text: <span class=""txt"">' + (it.truth ? esc(it.truth) : '<i>nothing</i>') + '</span></div>' : '') +
+    '</div>';
+}
+
+function renderItems() {
+  const only = document.getElementById('revonly').value;
+  const rows = REV.items.filter(it => only === 'all' ? true : only === 'judged' ? !!it.verdict : it.bucket === only);
+  document.getElementById('revcount').textContent = rows.length + ' shown';
+  document.getElementById('revitems').innerHTML = rows.length ? rows.map(itemCard).join('') :
+    '<div class=""empty"">nothing here</div>';
+}
+
+function renderReview() {
+  if (!REV) return;
+  document.getElementById('review').hidden = false;
+  document.getElementById('revnote').innerHTML =
+    REV.items.length + ' of up to ' + REV.sampleSize + ' differences, picked at random and repeatably' +
+    (REV.picked ? ' (' + REV.picked + ' new in this run)' : '') + '. ' +
+    (REV.baseline ? 'Verdicts are kept in <code>' + esc(REV.baseline) + '</code>. ' : 'No baseline file was given, so verdicts cannot be kept. ') +
+    (live ? 'Pick the engine that read the scan correctly, or <i>Both wrong</i> - type the correct text if you can, so later runs are graded without asking again.'
+          : 'Run with <code>--review</code> to record verdicts here.') +
+    (REV.error ? ' <span class=""b"">Not all written: ' + esc(REV.error) + '</span>' : '');
+  renderScore();
+  renderItems();
+}
+
+async function sendVerdict(number, verdict) {
+  const input = document.querySelector('input[data-truth=""' + number + '""]');
+  const body = { number, verdict, truth: verdict === 'neither' && input ? input.value : null };
+  try {
+    const r = await fetch('api/verdict', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const j = await r.json();
+    if (j.error) { alert('Not saved: ' + j.error); return; }
+    const i = REV.items.findIndex(x => x.number === number);
+    if (i >= 0) REV.items[i] = j.item;
+    REV.score = j.score;
+    renderScore();
+    const card = document.getElementById('item-' + number);
+    if (card) card.outerHTML = itemCard(j.item);
+  } catch (e) {
+    alert('Not saved - is the review server still running? ' + e);
+  }
+}
+
+if (REV) {
+  renderReview();
+  document.getElementById('revonly').addEventListener('change', renderItems);
+  document.getElementById('revitems').addEventListener('click', e => {
+    const btn = e.target.closest('button[data-n]');
+    if (btn && live) sendVerdict(+btn.dataset.n, btn.dataset.v);
+  });
+  document.getElementById('revitems').addEventListener('keydown', e => {
+    if (e.key === 'Enter' && e.target.dataset.truth && live) sendVerdict(+e.target.dataset.truth, 'neither');
+  });
+  if (location.protocol.startsWith('http'))
+    fetch('api/ping').then(r => { if (r.ok) { live = true; renderReview(); } }).catch(() => {});
+}
 </script>
 </body>
 </html>";
