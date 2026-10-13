@@ -29,20 +29,65 @@ namespace PdfQualityCompare
             // Measure only: diagnosing one document should not leave files behind.
             if (options.Annotations)
                 TextDiffAnnotations.Measure(r, referencePdf, candidatePdf, options, null);
-            DocumentComparer.LayoutAlignment layout = DocumentComparer.AnalyzeLayout(a, b, pages);
+            DocumentComparer.LayoutAlignment layout = DocumentComparer.AnalyzeLayout(a, b, pages, options);
 
-            PrintScores(r);
+            PrintScores(r, options);
+            PrintOcr(r, options);
             PrintPages(a, b, pages, layout);
-            PrintFonts(a, b, options);
+            if (!options.Ocr) PrintFonts(a, b, options);
             PrintWorstWords(a, b, layout);
             PrintHunks(r);
         }
 
-        private static void PrintScores(DocResult r)
+        private static void PrintOcr(DocResult r, Options options)
+        {
+            if (r.ReferenceIgnoredWords + r.CandidateIgnoredWords > 0)
+            {
+                Console.WriteLine("--- ignored text --------------------------------------------");
+                Console.WriteLine("  {0} word(s) struck out of {1}, {2} of {3}; {4} highlighted difference(s) removed",
+                    r.ReferenceIgnoredWords, options.ReferenceLabel, r.CandidateIgnoredWords, options.CandidateLabel,
+                    r.IgnoredTextDiffs);
+                Console.WriteLine();
+            }
+            if (!r.OcrRun) return;
+
+            Console.WriteLine("--- OCR, word by word at the same place ---------------------");
+            Console.WriteLine("  agreement {0:0.00}%   read alike {1}   read differently {2}   only {3} {4}   only {5} {6}",
+                100 * r.OcrAgreement, r.OcrSameWords, r.OcrDifferentWords,
+                options.ReferenceLabel, r.OcrOnlyReference, options.CandidateLabel, r.OcrOnlyCandidate);
+            if (r.TextDiffRun)
+                Console.WriteLine("  highlighted differences: {0} kept; removed {1} read alike in the same place, {2} spacing only",
+                    r.OcrHighlights.Count, r.OcrReadingOrderDiffs, r.OcrSpacingDiffs);
+            Console.WriteLine();
+
+            if (r.OcrHighlights.Count > 0)
+            {
+                Console.WriteLine("--- highlighted differences, what each engine read ----------");
+                int shown = 0;
+                foreach (OcrHighlightDiff d in r.OcrHighlights)
+                {
+                    if (shown++ >= 25) break;
+                    Console.WriteLine("  [ID {0} p{1}]", d.Id, d.Page);
+                    Console.WriteLine("    {0,-10} {1}", options.ReferenceLabel, Reading(d.Reference));
+                    Console.WriteLine("    {0,-10} {1}", options.CandidateLabel, Reading(d.Candidate));
+                }
+                if (r.OcrHighlights.Count > shown)
+                    Console.WriteLine("  ... {0} more in the annotation log and the report", r.OcrHighlights.Count - shown);
+                Console.WriteLine();
+            }
+        }
+
+        private static string Reading(string text)
+        {
+            return string.IsNullOrEmpty(text) ? "(nothing)" : TextNormalizer.Ellipsize(text, 150);
+        }
+
+        private static void PrintScores(DocResult r, Options options)
         {
             Console.WriteLine("--- scores --------------------------------------------------");
-            Console.WriteLine("  overall {0,6:0.0}   text {1,6:0.0}   layout {2,6:0.0}   font {3,6:0.0}   page {4,6:0.0}",
-                r.OverallScore, r.TextScore, r.LayoutScore, r.FontScore, r.PageScore);
+            Console.WriteLine("  overall {0,6:0.0}   text {1,6:0.0}   layout {2,6:0.0}   font {3,6}   page {4,6:0.0}",
+                r.OverallScore, r.TextScore, r.LayoutScore,
+                options.Ocr ? "-" : r.FontScore.ToString("0.0", CultureInfo.InvariantCulture), r.PageScore);
             Console.WriteLine("  content similarity {0:0.00}%   reading order {1:0.00}%   words {2} -> {3} (lost {4}, gained {5}, reordered {6})",
                 100 * r.ContentSimilarity, 100 * r.ReadingOrderSimilarity,
                 r.ReferenceWords, r.CandidateWords, r.LostWords, r.GainedWords, r.MovedWords);
@@ -191,6 +236,8 @@ namespace PdfQualityCompare
         private static void PrintWorstWords(DocFeatures a, DocFeatures b, DocumentComparer.LayoutAlignment layout)
         {
             Console.WriteLine("--- largest position differences (after removing each page's own shift) ---");
+            // Under --ocr every pair was read alike at the same place, so this is how far
+            // apart the two engines drew one word's box.
 
             var rows = new List<object[]>();
             for (int k = 0; k < layout.Pairs.Count; k++)

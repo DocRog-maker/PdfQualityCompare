@@ -51,7 +51,9 @@ namespace PdfQualityCompare
                     f.Pages.Add(info);
 
                     BeginPage(te, page);
+                    int firstWord = f.Words.Count, firstLine = f.Lines.Count;
                     ReadPage(te, f, info, crop, pageNum - 1, fontFacts, options);
+                    StripIgnored(f, info, firstWord, firstLine, options);
                 }
 
                 foreach (FontUsage u in f.Fonts.Values)
@@ -70,6 +72,31 @@ namespace PdfQualityCompare
                 if (te != null) te.Dispose();
                 if (doc != null) doc.Dispose();
             }
+        }
+
+        /// <summary>
+        /// Takes the --ignore-text phrases out of one page's words, so a watermark one side
+        /// stamps into its text layer is neither lost nor gained text. Lines keep their raw
+        /// text for reporting and lose the phrase from the form they are matched on.
+        /// </summary>
+        private static void StripIgnored(DocFeatures f, PageInfo info, int firstWord, int firstLine, Options options)
+        {
+            if (options.IgnorePhrases.Count == 0 || f.Words.Count == firstWord) return;
+
+            var tokens = new List<string>(f.Words.Count - firstWord);
+            for (int i = firstWord; i < f.Words.Count; i++) tokens.Add(f.Words[i].Text);
+            bool[] ignored = IgnoredText.Mark(tokens, options.IgnorePhrases);
+
+            for (int i = ignored.Length - 1; i >= 0; i--)
+            {
+                if (!ignored[i]) continue;
+                f.Words.RemoveAt(firstWord + i);
+                info.WordCount--;
+                f.IgnoredWords++;
+            }
+
+            for (int i = firstLine; i < f.Lines.Count; i++)
+                f.Lines[i].Text = IgnoredText.StripFromLine(f.Lines[i].Text, options.IgnorePhrases);
         }
 
         private static void BeginPage(TextExtractor te, Page page)

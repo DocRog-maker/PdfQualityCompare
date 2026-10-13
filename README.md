@@ -79,6 +79,44 @@ highlighted copy of each side.
 | `--visual-dpi <n>` | Comparison resolution; rendering happens at twice this. |
 | `--no-annotations` | Skip the Apryse `HighlightTextDiff` pass (it costs about 5s per 100 documents). |
 | `--highlight-moves` | Let that pass mark moved text too, which counts moves as differences. |
+| `--ocr` | Both runs are OCR of the same scans; see below. |
+| `--ignore-text <phrase>` | Strike a phrase - a trial watermark, say - out of both sides. Repeatable. |
+
+## Comparing OCR output
+
+`--ocr` compares two OCR engines run over the same scanned PDFs, rather than two
+conversions of a source document:
+
+```bash
+PdfQualityCompare.exe -r ocr\nutrient -c ocr\apryse -o C:\reports\ocr --ocr --ignore-text "Nutrient SDK Trial Version"
+```
+
+Neither side is the truth here, so read the reference and candidate as two opinions. Three
+things change:
+
+- **Words are paired by where they sit on the page**, not by what they say. Both engines
+  read the same image, so the question is whether they read the same thing at the same
+  place. Two boxes are the same word when they share half the smaller box, or, when they
+  read the same, when they sit on the same line with their middles within 3pt - one engine
+  boxes a comma to the ink and another to the line height. The result is the **OCR word
+  agreement**, with counts of words read alike, read differently, and found by one engine
+  only. The layout figures are measured on the pairs read alike, so they say how closely
+  the two engines agree on each word's box.
+- **The highlighted differences are checked word by word.** `HighlightTextDiff` compares the
+  text in reading order, and two engines often walk a page in a different order - a
+  two-column list of references a column at a time on one side, a row at a time on the
+  other. Whole runs are then highlighted that both engines read identically. A difference
+  is removed from both documents when every word under it was read the same at the same
+  place by the other engine, when it is only an `--ignore-text` phrase, or when it covers no
+  words at all and only adds or removes a space. Each highlight that is kept gets a note
+  with what both engines read around the words they disagree on, and the reference is
+  saved highlighted as well as the candidate (`diffs\<doc>.highlight-reference.pdf`). The
+  same readings are in the report, the `--explain` output and the annotation log.
+- **Fonts are not scored.** An OCR text layer is invisible and drawn in whatever font the
+  engine chose; its weight is shared out over text, layout and page.
+
+`--ignore-text` works without `--ocr` too. The phrase is matched as consecutive words on one
+page, normalised like everything else, so case does not matter.
 
 ## Several candidates at once
 

@@ -28,10 +28,14 @@ namespace PdfQualityCompare
             PageAligner.Alignment pages = PageAligner.Align(reference, candidate);
             r.PageMap = pages;
 
+            r.ReferenceIgnoredWords = reference.IgnoredWords;
+            r.CandidateIgnoredWords = candidate.IgnoredWords;
+
             ComparePages(r, reference, candidate, pages);
             CompareText(r, reference, candidate, options);
             CompareFonts(r, reference, candidate);
             CompareLayout(r, reference, candidate, pages, options);
+            if (options.Ocr) OcrComparison.Compare(r, reference, candidate, pages);
             Score(r, options);
             return r;
         }
@@ -295,7 +299,7 @@ namespace PdfQualityCompare
             r.CandidateLines = b.Lines.Count;
             r.MatchedLines = CountIdenticalLines(a.Lines, b.Lines);
 
-            LayoutAlignment layout = AnalyzeLayout(a, b, pages);
+            LayoutAlignment layout = AnalyzeLayout(a, b, pages, options);
             List<int[]> pairs = layout.Pairs;
 
             r.PlacedWords = pairs.Count;
@@ -387,8 +391,11 @@ namespace PdfQualityCompare
         /// Pairs up the words of the two documents page by page, and reports how far each
         /// one moved. Shared with the diagnostic so both tell the same story.
         /// </summary>
-        internal static LayoutAlignment AnalyzeLayout(DocFeatures a, DocFeatures b, PageAligner.Alignment pages)
+        internal static LayoutAlignment AnalyzeLayout(DocFeatures a, DocFeatures b, PageAligner.Alignment pages,
+                                                      Options options)
         {
+            if (options.Ocr) return AnalyzeOcrLayout(a, b, pages);
+
             var layout = new LayoutAlignment();
 
             List<List<int>> byPageA = WordsByPage(a, pages.CandidateFor.Length);
@@ -405,6 +412,43 @@ namespace PdfQualityCompare
 
                 layout.PageOffsetX[i] = DominantValue(layout.Dx, first, layout.Dx.Count, 2.0);
                 layout.PageOffsetY[i] = DominantValue(layout.Dy, first, layout.Dy.Count, 2.0);
+            }
+
+            layout.OffsetX = DominantValue(layout.Dx, 0, layout.Dx.Count, 2.0);
+            layout.OffsetY = DominantValue(layout.Dy, 0, layout.Dy.Count, 2.0);
+            return layout;
+        }
+
+        /// <summary>
+        /// The OCR form of <see cref="AnalyzeLayout"/>: the pairs are words read the same at
+        /// the same place, so what is left to measure is how closely the two engines agree on
+        /// each word's box. Text matching would pair repeated tokens across the page and
+        /// report the distance between two different words as a layout fault.
+        /// </summary>
+        private static LayoutAlignment AnalyzeOcrLayout(DocFeatures a, DocFeatures b, PageAligner.Alignment pages)
+        {
+            var layout = new LayoutAlignment();
+
+            List<int[]> same = OcrComparison.Pair(a, b, pages).Same;
+            same.Sort((p, q) =>
+            {
+                int byPage = a.Words[p[0]].Page.CompareTo(a.Words[q[0]].Page);
+                return byPage != 0 ? byPage : p[0].CompareTo(q[0]);
+            });
+
+            int first = 0;
+            for (int k = 0; k < same.Count; k++)
+            {
+                WordBox wa = a.Words[same[k][0]], wb = b.Words[same[k][1]];
+                layout.Pairs.Add(same[k]);
+                layout.Dx.Add(wb.Left - wa.Left);
+                layout.Dy.Add(wb.Top - wa.Top);
+
+                // The last pair on its page: the page's own shift is taken over [first, k].
+                if (k + 1 < same.Count && a.Words[same[k + 1][0]].Page == wa.Page) continue;
+                layout.PageOffsetX[wa.Page] = DominantValue(layout.Dx, first, k + 1, 2.0);
+                layout.PageOffsetY[wa.Page] = DominantValue(layout.Dy, first, k + 1, 2.0);
+                first = k + 1;
             }
 
             layout.OffsetX = DominantValue(layout.Dx, 0, layout.Dx.Count, 2.0);

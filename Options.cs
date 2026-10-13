@@ -80,6 +80,24 @@ namespace PdfQualityCompare
         public bool CaseSensitive;
         public bool IgnorePunctuation;
 
+        /// <summary>
+        /// Both runs are OCR of the same scanned pages rather than conversions of a source
+        /// document. The text is an invisible layer over the page image, so the font it is
+        /// drawn in says nothing and is left out of the score, and words are paired by
+        /// where they sit on the page - both engines read the same image - rather than by
+        /// what they say.
+        /// </summary>
+        public bool Ocr;
+
+        /// <summary>
+        /// Phrases to strike out of the text on both sides before anything is compared,
+        /// as given on the command line - a trial watermark is the usual case.
+        /// </summary>
+        public readonly List<string> IgnoreText = new List<string>();
+
+        /// <summary><see cref="IgnoreText"/> split into normalised tokens, once the case options are known.</summary>
+        public List<string[]> IgnorePhrases = new List<string[]>();
+
         /// <summary>Run the Apryse text comparison and count the highlight annotations it adds.</summary>
         public bool Annotations = true;
 
@@ -152,6 +170,12 @@ Options:
   --layout-tolerance <pt> Residual line displacement counted as misplaced (default: 3.0).
   --case-sensitive        Treat text case as significant (default: ignore case).
   --ignore-punctuation    Strip punctuation before comparing text.
+  --ocr                   Both runs are OCR of the same scanned pages: pair words by
+                          position, leave fonts out of the score, and strike out
+                          highlighted differences where both engines read the same
+                          words in the same place.
+  --ignore-text <phrase>  Ignore this phrase on both sides, e.g. a trial watermark.
+                          Repeatable.
   --no-annotations        Skip the Apryse HighlightTextDiff pass, so no annotation counts
                           are reported and no highlighted PDFs are written.
   --highlight-moves       Let that comparison also highlight moved text (counts moves as differences).
@@ -231,6 +255,14 @@ Examples:
                         o.CaseSensitive = true; break;
                     case "--ignore-punctuation":
                         o.IgnorePunctuation = true; break;
+                    case "--ocr":
+                        o.Ocr = true; break;
+                    case "--ignore-text":
+                    {
+                        string phrase = Next(args, ref i, ref error);
+                        if (phrase != null) o.IgnoreText.Add(phrase);
+                        break;
+                    }
                     case "--no-annotations":
                         o.Annotations = false; break;
                     case "--highlight-moves":
@@ -291,6 +323,25 @@ Examples:
             MakeLabelsUnique(o.Candidates);
 
             if (o.ModeDetected && !DetectMode(o, ref error)) return null;
+
+            // Normalised the way the extracted words are, so the phrase matches whatever
+            // case and punctuation options the run was given.
+            foreach (string phrase in o.IgnoreText)
+            {
+                string[] tokens = IgnoredText.Tokenize(phrase, o);
+                if (tokens.Length == 0) { error = "--ignore-text \"" + phrase + "\" has no words in it."; return null; }
+                o.IgnorePhrases.Add(tokens);
+            }
+
+            // An OCR text layer is drawn invisibly in whatever font the engine chose, so
+            // the font score would only measure that choice. Its weight goes to the rest.
+            if (o.Ocr && o.WeightFont > 0)
+            {
+                double rest = o.WeightText + o.WeightLayout + o.WeightPage;
+                if (rest <= 0) { error = "--ocr leaves nothing to score: --weights puts everything on fonts."; return null; }
+                o.WeightText /= rest; o.WeightLayout /= rest; o.WeightPage /= rest;
+                o.WeightFont = 0;
+            }
 
             if (string.IsNullOrEmpty(o.OutputDir))
                 o.OutputDir = Path.Combine(Environment.CurrentDirectory, "pdf-quality-report");

@@ -33,6 +33,13 @@ namespace PdfQualityCompare
             /// <summary>"edit", "delete" or "insert" as the comparison classified it.</summary>
             public string Type;
             public Rect Area;
+            /// <summary>
+            /// The marked areas themselves, one per quad. A highlight whose text breaks
+            /// across lines marks a piece of each, and its <see cref="Area"/> is the box
+            /// around all of them - which can take in most of a paragraph that was never
+            /// highlighted. Holds just <see cref="Area"/> when the quads cannot be read.
+            /// </summary>
+            public List<Rect> Quads = new List<Rect>();
         }
 
         /// <summary>
@@ -72,6 +79,7 @@ namespace PdfQualityCompare
                         mark.Title = new Markup(annot).GetTitle() ?? "";
                         mark.Area = annot.GetRect();
                         mark.Area.Normalize();
+                        mark.Quads = QuadsOf(annot, mark.Area);
                     }
                     catch (Exception)
                     {
@@ -88,6 +96,31 @@ namespace PdfQualityCompare
                 }
             }
             return found;
+        }
+
+        private static List<Rect> QuadsOf(Annot annot, Rect area)
+        {
+            var quads = new List<Rect>();
+            try
+            {
+                var markup = new TextMarkup(annot.GetSDFObj());
+                int n = markup.GetQuadPointCount();
+                for (int i = 0; i < n; i++)
+                {
+                    QuadPoint q = markup.GetQuadPoint(i);
+                    double x1 = Math.Min(Math.Min(q.p1.x, q.p2.x), Math.Min(q.p3.x, q.p4.x));
+                    double x2 = Math.Max(Math.Max(q.p1.x, q.p2.x), Math.Max(q.p3.x, q.p4.x));
+                    double y1 = Math.Min(Math.Min(q.p1.y, q.p2.y), Math.Min(q.p3.y, q.p4.y));
+                    double y2 = Math.Max(Math.Max(q.p1.y, q.p2.y), Math.Max(q.p3.y, q.p4.y));
+                    quads.Add(new Rect(x1, y1, x2, y2));
+                }
+            }
+            catch (Exception)
+            {
+                quads.Clear();
+            }
+            if (quads.Count == 0) quads.Add(area);
+            return quads;
         }
 
         /// <summary>

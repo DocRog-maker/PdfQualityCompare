@@ -66,8 +66,24 @@ namespace PdfQualityCompare
                     if (moved.Error != null && string.IsNullOrEmpty(result.HighlightError))
                         result.HighlightError = "moved text cancellation: " + moved.Error;
 
+                    // Last, on what the two passes above left: differences that are only the
+                    // order two OCR engines walked the page in, and ignored phrases such as a
+                    // trial watermark. The highlights it keeps get a note of both readings.
+                    OcrHighlightFilter.Outcome ocr = new OcrHighlightFilter.Outcome();
+                    if (options.Ocr || options.IgnorePhrases.Count > 0)
+                    {
+                        ocr = OcrHighlightFilter.Apply(a, b, options);
+                        if (ocr.Error != null && string.IsNullOrEmpty(result.HighlightError))
+                            result.HighlightError = "OCR highlight filter: " + ocr.Error;
+                    }
+                    result.OcrReadingOrderDiffs = ocr.ReadingOrder;
+                    result.IgnoredTextDiffs = ocr.IgnoredText;
+                    result.OcrSpacingDiffs = ocr.Spacing;
+                    result.OcrFilterAnnotations = ocr.Annotations;
+                    result.OcrHighlights = ocr.Kept;
+
                     result.TextDiffDifferences =
-                        Math.Max(0, differences - symbols.Diffs.Count - moved.Differences);
+                        Math.Max(0, differences - symbols.Diffs.Count - moved.Differences - ocr.Differences);
                     // The comparison's own highlights, counted by finding them: it clears
                     // the annotations a document arrived with, so measuring the growth in
                     // the annotation total undercounts every document that had any.
@@ -78,13 +94,18 @@ namespace PdfQualityCompare
 
                     // Nothing was highlighted, so a saved copy would be the candidate unchanged.
                     if (diffsDirectory != null && result.CandidateDiffAnnotations > 0)
-                        Save(result, b, diffsDirectory);
+                        result.HighlightPdfPath = Save(result, b, diffsDirectory, "candidate");
+
+                    // Two OCR runs have no side that is the truth, so the reference's half of
+                    // each difference is as much worth looking at as the candidate's.
+                    if (diffsDirectory != null && options.Ocr && result.ReferenceDiffAnnotations > 0)
+                        result.HighlightReferencePdfPath = Save(result, a, diffsDirectory, "reference");
 
                     // Suppressed symbols are worth a log of their own even when nothing is
                     // left highlighted: that is the run where the count went to zero, and
                     // the reason for it should be on record.
-                    if (diffsDirectory != null && (result.TextDiffAnnotations > 0 ||
-                                                   symbols.Diffs.Count > 0 || moved.Pairs.Count > 0))
+                    if (diffsDirectory != null && (result.TextDiffAnnotations > 0 || symbols.Diffs.Count > 0 ||
+                                                   moved.Pairs.Count > 0 || ocr.Differences > 0))
                         LogAnnotations(result, a, b, diffsDirectory, options);
 
                     return;
@@ -108,9 +129,10 @@ namespace PdfQualityCompare
         /// own error handling: the counts are already correct by the time we get here, and
         /// a document that will not write out should not lose its metrics as well.
         /// </summary>
-        private static void Save(DocResult result, PDFDoc doc, string directory)
+        /// <returns>The file written, or null with the reason in HighlightError.</returns>
+        private static string Save(DocResult result, PDFDoc doc, string directory, string side)
         {
-            string target = Path.Combine(directory, SafeFileName(result.Name) + ".highlight-candidate.pdf");
+            string target = Path.Combine(directory, SafeFileName(result.Name) + ".highlight-" + side + ".pdf");
 
             if (target.Length >= 260)
             {
@@ -118,14 +140,15 @@ namespace PdfQualityCompare
                 // rather than reporting a file that is not there.
                 result.HighlightError = "path is " + target.Length +
                     " characters, over the Windows limit of 259; use a shorter --out directory";
-                return;
+                return null;
             }
 
             string failure = TrySave(doc, target, pdftron.SDF.SDFDoc.SaveOptions.e_remove_unused)
                           ?? TrySave(doc, target, (pdftron.SDF.SDFDoc.SaveOptions)0);
 
-            if (failure == null) result.HighlightPdfPath = target;
-            else result.HighlightError = failure;
+            if (failure == null) return target;
+            result.HighlightError = failure;
+            return null;
         }
 
         /// <summary>Saves, and confirms a file actually appeared. Returns null on success.</summary>
@@ -161,7 +184,8 @@ namespace PdfQualityCompare
                     writer.WriteLine("Document    : {0}", result.Name);
                     writer.WriteLine("Generated   : {0:yyyy-MM-dd HH:mm:ss}", DateTime.Now);
                     // Two IDs go per cancelled pair, so that is what the count lost.
-                    int struckOff = result.SuppressedSymbolDiffs.Count + 2 * result.MovedTextRemoved;
+                    int struckOff = result.SuppressedSymbolDiffs.Count + 2 * result.MovedTextRemoved +
+                                    result.OcrReadingOrderDiffs + result.IgnoredTextDiffs + result.OcrSpacingDiffs;
                     if (struckOff > 0)
                         writer.WriteLine("Differences : {0} kept of the {1} HighlightTextDiff reported",
                             result.TextDiffDifferences, result.TextDiffDifferences + struckOff);
@@ -173,6 +197,7 @@ namespace PdfQualityCompare
                         result.CandidateDiffAnnotations, options.CandidateLabel);
                     WriteSuppressedSymbols(writer, result, options);
                     WriteMovedText(writer, result, options);
+                    WriteOcrFilter(writer, result, options);
 
                     WriteSide(writer, options.ReferenceLabel, reference);
                     WriteSide(writer, options.CandidateLabel, candidate);
@@ -233,6 +258,35 @@ namespace PdfQualityCompare
                     options.ReferenceLabel, m.ReferenceId, m.ReferencePage,
                     options.CandidateLabel, m.CandidateId, m.CandidatePage,
                     m.Characters, Quote(m.Text));
+        }
+
+        /// <summary>
+        /// Records what the OCR check took off, and what each engine read under every
+        /// difference it kept - the same text as the notes left on those highlights.
+        /// </summary>
+        private static void WriteOcrFilter(TextWriter writer, DocResult result, Options options)
+        {
+            if (result.IgnoredTextDiffs > 0)
+                writer.WriteLine("Ignored text: {0} difference(s) removed from both documents as --ignore-text phrases",
+                                 result.IgnoredTextDiffs);
+            if (result.OcrReadingOrderDiffs > 0)
+                writer.WriteLine("Read alike  : {0} difference(s) removed from both documents, every word under them " +
+                                 "read the same at the same place by the other engine", result.OcrReadingOrderDiffs);
+            if (result.OcrSpacingDiffs > 0)
+                writer.WriteLine("Spacing     : {0} difference(s) removed from both documents, covering no words " +
+                                 "and only adding or taking away a space", result.OcrSpacingDiffs);
+            if (result.IgnoredTextDiffs + result.OcrReadingOrderDiffs + result.OcrSpacingDiffs > 0)
+                writer.WriteLine("              {0} annotation(s) removed by these", result.OcrFilterAnnotations);
+
+            if (result.OcrHighlights.Count == 0) return;
+            writer.WriteLine("Kept        : {0} difference(s); what each engine read around the words they disagree on:",
+                             result.OcrHighlights.Count);
+            foreach (OcrHighlightDiff d in result.OcrHighlights)
+            {
+                writer.WriteLine("              TextDiffID {0} p{1}, {2} word(s) disagree", d.Id, d.Page, d.DisagreedWords);
+                writer.WriteLine("                {0,-10} {1}", options.ReferenceLabel, Quote(d.Reference));
+                writer.WriteLine("                {0,-10} {1}", options.CandidateLabel, Quote(d.Candidate));
+            }
         }
 
         private static void WriteSide(TextWriter writer, string label, PDFDoc doc)

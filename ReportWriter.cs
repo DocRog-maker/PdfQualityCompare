@@ -62,6 +62,9 @@ namespace PdfQualityCompare
                 "text_diff_annotations","text_diff_differences","ref_diff_annotations","cand_diff_annotations",
                 "encoding_diffs_ignored","encoding_annotations_ignored","encoding_diffs_detail",
                 "moved_text_pairs","moved_text_chars","moved_text_cancelled","moved_text_annotations_removed",
+                "ref_ignored_words","cand_ignored_words","ignored_text_diffs",
+                "ocr_agreement","ocr_same_words","ocr_different_words","ocr_only_ref","ocr_only_cand",
+                "ocr_read_alike_diffs","ocr_spacing_diffs","ocr_filter_annotations_removed","ocr_kept_diffs",
                 "visual_diff_pct","worst_page_diff_pct","worst_page","error"
             });
             return string.Join(",", columns.ToArray());
@@ -96,6 +99,10 @@ namespace PdfQualityCompare
                     Q(EncodingDiffList(r.SuppressedSymbolDiffs)),
                     I(r.MovedText.Count), I(MovedChars(r.MovedText)),
                     I(r.MovedTextRemoved), I(r.MovedTextAnnotations),
+                    I(r.ReferenceIgnoredWords), I(r.CandidateIgnoredWords), I(r.IgnoredTextDiffs),
+                    r.OcrRun ? N(r.OcrAgreement, 5) : "", I(r.OcrSameWords), I(r.OcrDifferentWords),
+                    I(r.OcrOnlyReference), I(r.OcrOnlyCandidate),
+                    I(r.OcrReadingOrderDiffs), I(r.OcrSpacingDiffs), I(r.OcrFilterAnnotations), I(r.OcrHighlights.Count),
                     N(r.VisualDiffPct, 3), N(r.WorstPageDiffPct, 3), I(r.WorstPageIndex), Q(r.Error)
                 });
             return string.Join(",", cells.ToArray());
@@ -180,6 +187,14 @@ namespace PdfQualityCompare
             sb.Append(",\"mode\":").Append(Js(options.Mode == LayoutMode.Flat ? "flat" : "qualitron"));
             sb.Append(",\"layoutTolerance\":").Append(Jn(options.LayoutTolerance));
             sb.Append(",\"visual\":").Append(options.Visual ? "true" : "false");
+            sb.Append(",\"ocr\":").Append(options.Ocr ? "true" : "false");
+            sb.Append(",\"ignoreText\":[");
+            for (int i = 0; i < options.IgnoreText.Count; i++)
+            {
+                if (i > 0) sb.Append(',');
+                sb.Append(Js(options.IgnoreText[i]));
+            }
+            sb.Append(']');
             sb.Append(",\"weights\":{\"text\":").Append(Jn(options.WeightText))
               .Append(",\"layout\":").Append(Jn(options.WeightLayout))
               .Append(",\"font\":").Append(Jn(options.WeightFont))
@@ -206,7 +221,8 @@ namespace PdfQualityCompare
             sb.Append(",\"overall\":").Append(Jn(r.OverallScore));
             sb.Append(",\"textScore\":").Append(Jn(r.TextScore));
             sb.Append(",\"layoutScore\":").Append(Jn(r.LayoutScore));
-            sb.Append(",\"fontScore\":").Append(Jn(r.FontScore));
+            // Not scored under --ocr, and null so the report shows a dash rather than a zero.
+            sb.Append(",\"fontScore\":").Append(r.OcrRun ? "null" : Jn(r.FontScore));
             sb.Append(",\"pageScore\":").Append(Jn(r.PageScore));
 
             sb.Append(",\"refPages\":").Append(r.ReferencePages);
@@ -303,7 +319,46 @@ namespace PdfQualityCompare
                   .Append('}');
             }
             sb.Append(']');
+            sb.Append(",\"refIgnoredWords\":").Append(r.ReferenceIgnoredWords);
+            sb.Append(",\"candIgnoredWords\":").Append(r.CandidateIgnoredWords);
+            sb.Append(",\"ignoredTextDiffs\":").Append(r.IgnoredTextDiffs);
+            sb.Append(",\"ocrRun\":").Append(r.OcrRun ? "true" : "false");
+            sb.Append(",\"ocrAgreement\":").Append(r.OcrRun ? Jn(r.OcrAgreement, 5) : "null");
+            sb.Append(",\"ocrSame\":").Append(r.OcrSameWords);
+            sb.Append(",\"ocrDifferent\":").Append(r.OcrDifferentWords);
+            sb.Append(",\"ocrOnlyRef\":").Append(r.OcrOnlyReference);
+            sb.Append(",\"ocrOnlyCand\":").Append(r.OcrOnlyCandidate);
+            sb.Append(",\"ocrReadAlikeDiffs\":").Append(r.OcrReadingOrderDiffs);
+            sb.Append(",\"ocrSpacingDiffs\":").Append(r.OcrSpacingDiffs);
+            sb.Append(",\"ocrFilterAnnotations\":").Append(r.OcrFilterAnnotations);
+            sb.Append(",\"ocrHighlights\":[");
+            for (int i = 0; i < r.OcrHighlights.Count; i++)
+            {
+                OcrHighlightDiff d = r.OcrHighlights[i];
+                if (i > 0) sb.Append(',');
+                sb.Append("{\"id\":").Append(Js(d.Id))
+                  .Append(",\"page\":").Append(d.Page)
+                  .Append(",\"words\":").Append(d.DisagreedWords)
+                  .Append(",\"ref\":").Append(Js(Clip(d.Reference, 300)))
+                  .Append(",\"cand\":").Append(Js(Clip(d.Candidate, 300)))
+                  .Append('}');
+            }
+            sb.Append(']');
+            sb.Append(",\"ocrWordDiffs\":[");
+            for (int i = 0; i < r.OcrWordDiffs.Count; i++)
+            {
+                OcrWordDiff d = r.OcrWordDiffs[i];
+                if (i > 0) sb.Append(',');
+                sb.Append("{\"page\":").Append(d.Page)
+                  .Append(",\"x\":").Append(Jn(d.Left, 1))
+                  .Append(",\"y\":").Append(Jn(d.Top, 1))
+                  .Append(",\"ref\":").Append(Js(d.Reference))
+                  .Append(",\"cand\":").Append(Js(d.Candidate))
+                  .Append('}');
+            }
+            sb.Append(']');
             sb.Append(",\"highlightPdf\":").Append(Js(r.HighlightPdfPath));
+            sb.Append(",\"highlightRefPdf\":").Append(Js(r.HighlightReferencePdfPath));
             sb.Append(",\"highlightError\":").Append(Js(r.HighlightError));
             sb.Append(",\"annotationLog\":").Append(Js(r.AnnotationLogPath));
 
@@ -524,6 +579,8 @@ document.getElementById('sub').innerHTML =
   '</code> &middot; ' + docs.length + ' documents &middot; ' + esc(DATA.generated) +
   ' &middot; ' + esc(DATA.mode) + ' layout' +
   ' &middot; layout tolerance ' + DATA.layoutTolerance + 'pt' +
+  (DATA.ocr ? ' &middot; OCR comparison' : '') +
+  (DATA.ignoreText.length ? ' &middot; ignoring ' + DATA.ignoreText.map(t => '<code>' + esc(t) + '</code>').join(', ') : '') +
   ' &middot; build <code>' + esc(DATA.buildCommit) + '</code>' +
   (DATA.buildCommitDate ? ' of ' + esc(DATA.buildCommitDate) : '');
 
@@ -550,6 +607,12 @@ function buildCards(set, includeFailed) {
     cards.push(['Apryse diff marks', marks, 'on ' + DATA.candidateLabel]);
   }
   if (DATA.visual) cards.push(['Mean pixel difference', fmt(mean(set, d => d.visualDiffPct), 2) + '%', '']);
+  if (DATA.ocr) {
+    // Missing fonts mean nothing for an invisible OCR text layer; word agreement does.
+    const i = cards.findIndex(c => c[0] === 'Missing fonts');
+    if (i >= 0) cards.splice(i, 1);
+    cards.splice(1, 0, ['OCR word agreement', fmt(100 * mean(set, d => d.ocrAgreement), 2) + '%', 'read alike at the same place']);
+  }
   return cards;
 }
 
@@ -559,7 +622,7 @@ const renderCards = (id, cards) => document.getElementById(id).innerHTML = cards
 renderCards('cards', buildCards(compared, true));
 
 // Fonts that survived intact leave layout and text free to be judged on their own.
-if (fontMatched.length) {
+if (fontMatched.length && !DATA.ocr) {
   document.getElementById('subset').hidden = false;
   document.getElementById('subsethead').textContent =
     'Fonts unchanged — ' + fontMatched.length + ' of ' + compared.length + ' documents (' +
@@ -606,15 +669,16 @@ function render() {
       '<td class=""score ' + cls(d.overall) + '"">' + fmt(d.overall) + '</td>' +
       '<td class=""' + cls(d.textScore) + '"">' + fmt(d.textScore) + '</td>' +
       '<td class=""' + cls(d.layoutScore) + '"">' + fmt(d.layoutScore) + '</td>' +
-      '<td class=""' + cls(d.fontScore) + '"">' + fmt(d.fontScore) + '</td>' +
+      '<td' + (d.fontScore === null ? '' : ' class=""' + cls(d.fontScore) + '""') + '>' + fmt(d.fontScore) + '</td>' +
       '<td class=""' + cls(d.pageScore) + '"">' + fmt(d.pageScore) + '</td>' +
       '<td' + (d.refPages === d.candPages ? '' : ' class=""b""') + '>' + pages + '</td>' +
       '<td>' + fmt(100 * d.similarity, 2) + '%</td>' +
       '<td' + (d.readingOrder < d.similarity - 0.02 ? ' class=""w""' : '') + '>' + fmt(100 * d.readingOrder, 2) + '%</td>' +
       '<td class=""mark-count' + (d.candDiffAnnotations > 0 ? ' w' : '') + '"">' +
         (d.textDiffRun ? d.candDiffAnnotations : '–') + '</td>' +
+      (DATA.ocr ? '<td>–</td>' :
       '<td' + (d.missingFonts.length ? ' class=""b""' : '') + '>' + (d.missingFonts.length ? '-' + d.missingFonts.length : '0') +
-        (d.extraFonts.length ? ' / +' + d.extraFonts.length : '') + '</td>' +
+        (d.extraFonts.length ? ' / +' + d.extraFonts.length : '') + '</td>') +
       '<td>' + fmt(d.misplacedPct) + '%</td>' +
       '<td>' + fmt(d.p95Disp) + '</td>' +
       '<td class=""pixel-count"">' + (d.visualRun ? fmt(d.visualDiffPct, 2) + '%' : '–') + '</td>' +
@@ -665,6 +729,16 @@ function detail(d) {
     ['Fonts', d.refFonts + ' → ' + d.candFonts + ' (divergence ' + fmt(d.fontDivergence, 3) + ')'],
     ['Non-embedded fonts', d.refNonEmbedded + ' → ' + d.candNonEmbedded]
   ];
+  if (d.refIgnoredWords || d.candIgnoredWords || d.ignoredTextDiffs)
+    kv.push(['Ignored text', d.refIgnoredWords + ' words in ' + DATA.referenceLabel + ', ' + d.candIgnoredWords +
+      ' in ' + DATA.candidateLabel + '; ' + d.ignoredTextDiffs + ' highlighted differences removed']);
+  if (d.ocrRun) {
+    kv.unshift(['OCR word agreement', fmt(100 * d.ocrAgreement, 2) + '% (' + d.ocrSame + ' read alike, ' + d.ocrDifferent +
+      ' read differently, ' + d.ocrOnlyRef + ' only in ' + DATA.referenceLabel + ', ' + d.ocrOnlyCand + ' only in ' + DATA.candidateLabel + ')']);
+    if (d.textDiffRun)
+      kv.push(['OCR highlight check', d.ocrHighlights.length + ' kept; removed ' + d.ocrReadAlikeDiffs +
+        ' read alike in the same place and ' + d.ocrSpacingDiffs + ' spacing only (' + d.ocrFilterAnnotations + ' marks)']);
+  }
   if (d.visualRun) kv.push(['Pixel difference', fmt(d.visualDiffPct, 2) + '% (worst page ' + (d.worstPage + 1) + ': ' + fmt(d.worstPageDiffPct, 2) + '%)']);
   if (d.diffTruncated) kv.push(['Note', 'text diff was truncated - the documents diverge heavily']);
 
@@ -672,9 +746,22 @@ function detail(d) {
   html += '<h3>Measurements</h3><div class=""kv"">' +
     kv.map(k => '<div><span>' + k[0] + ':</span> ' + esc(String(k[1])) + '</div>').join('') + '</div>';
 
-  html += '<h3>Fonts in ' + esc(DATA.referenceLabel) + ' but not ' + esc(DATA.candidateLabel) + '</h3>' + fontRows(d.missingFonts);
-  html += '<h3>Fonts only in ' + esc(DATA.candidateLabel) + '</h3>' + fontRows(d.extraFonts);
-  html += '<h3>Fonts in both</h3>' + fontRows(d.sharedFonts);
+  if (d.ocrRun && d.textDiffRun) {
+    // The Apryse highlights that survived the OCR check, each with what both engines
+    // read around the words they disagree on - the same text as the notes in the PDFs.
+    html += '<h3>Highlighted differences (' + d.ocrHighlights.length + ')</h3>';
+    if (!d.ocrHighlights.length) html += '<div class=""empty"">none left after the OCR check</div>';
+    else html += d.ocrHighlights.map(h =>
+      '<div class=""hunk""><span class=""tag"">p' + h.page + ' &middot; ID ' + esc(h.id) + ' &middot; ' + h.words + ' word' + (h.words === 1 ? '' : 's') + '</span>' +
+      '<span class=""r"">' + esc(DATA.referenceLabel) + ': ' + (h.ref ? esc(h.ref) : '<i>nothing</i>') + '</span>' +
+      '<span class=""c"">' + esc(DATA.candidateLabel) + ': ' + (h.cand ? esc(h.cand) : '<i>nothing</i>') + '</span></div>').join('');
+  }
+
+  if (!d.ocrRun) {
+    html += '<h3>Fonts in ' + esc(DATA.referenceLabel) + ' but not ' + esc(DATA.candidateLabel) + '</h3>' + fontRows(d.missingFonts);
+    html += '<h3>Fonts only in ' + esc(DATA.candidateLabel) + '</h3>' + fontRows(d.extraFonts);
+    html += '<h3>Fonts in both</h3>' + fontRows(d.sharedFonts);
+  }
 
   html += '<h3>Largest text differences</h3>';
   if (!d.hunks.length) html += '<div class=""empty"">no text differences</div>';
@@ -685,9 +772,10 @@ function detail(d) {
       (h.cand ? '<span class=""c"">' + esc(h.cand) + '</span>' : '') + '</div>';
   }).join('');
 
-  if (d.highlightPdf || d.annotationLog || d.highlightError) {
+  if (d.highlightPdf || d.highlightRefPdf || d.annotationLog || d.highlightError) {
     html += '<h3>Annotations</h3><div class=""kv"">';
     if (d.highlightPdf) html += '<div><span>highlighted PDF:</span> ' + esc(d.highlightPdf) + '</div>';
+    if (d.highlightRefPdf) html += '<div><span>highlighted ' + esc(DATA.referenceLabel) + ':</span> ' + esc(d.highlightRefPdf) + '</div>';
     if (d.annotationLog) html += '<div><span>annotation dump:</span> ' + esc(d.annotationLog) + '</div>';
     if (d.highlightError) html += '<div class=""b""><span>not written:</span> ' + esc(d.highlightError) + '</div>';
     html += '</div>';

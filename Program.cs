@@ -69,6 +69,10 @@ namespace PdfQualityCompare
             Console.WriteLine("Build     : {0}", BuildStamp.Describe());
             Console.WriteLine("Layout    : {0}{1}", Options.Describe(options.Mode),
                               options.ModeDetected ? ", detected from the roots" : ", from --mode");
+            if (options.Ocr)
+                Console.WriteLine("OCR       : words paired by position, fonts not scored");
+            foreach (string phrase in options.IgnoreText)
+                Console.WriteLine("Ignoring  : \"{0}\"", phrase);
             Console.WriteLine("Reference : " + label, options.ReferenceLabel, options.ReferenceRoot);
             if (many)
             {
@@ -647,22 +651,26 @@ namespace PdfQualityCompare
             Console.WriteLine("Compared {0} document(s); {1} could not be compared.", compared.Count, failed);
             if (compared.Count == 0) return;
 
-            PrintAggregate(compared);
+            PrintAggregate(compared, options);
 
             // Substituting a font reflows the text, so a corpus-wide layout figure is partly
             // a measure of font substitution. Repeating the numbers over documents whose
-            // fonts came through intact isolates the layout engine's own behaviour.
-            Console.WriteLine();
-            Console.WriteLine("--- documents whose fonts came through unchanged -------------");
-            if (fontMatched.Count == 0)
+            // fonts came through intact isolates the layout engine's own behaviour. An OCR
+            // text layer is invisible, and its font is the engine's choice, so not there.
+            if (!options.Ocr)
             {
-                Console.WriteLine("None: every compared document has a font difference.");
-            }
-            else
-            {
-                Console.WriteLine("{0} of {1} document(s) ({2:0.0}%).",
-                    fontMatched.Count, compared.Count, 100.0 * fontMatched.Count / compared.Count);
-                PrintAggregate(fontMatched);
+                Console.WriteLine();
+                Console.WriteLine("--- documents whose fonts came through unchanged -------------");
+                if (fontMatched.Count == 0)
+                {
+                    Console.WriteLine("None: every compared document has a font difference.");
+                }
+                else
+                {
+                    Console.WriteLine("{0} of {1} document(s) ({2:0.0}%).",
+                        fontMatched.Count, compared.Count, 100.0 * fontMatched.Count / compared.Count);
+                    PrintAggregate(fontMatched, options);
+                }
             }
 
             Console.WriteLine();
@@ -673,13 +681,14 @@ namespace PdfQualityCompare
             {
                 if (r.Status != "Compared") continue;
                 if (shown++ >= 10) break;
-                Console.WriteLine("  {0,-46} {1,7:0.0} {2,7:0.0} {3,7:0.0} {4,7:0.0} {5,7:0.0}",
-                    Shorten(r.Name, 46), r.OverallScore, r.TextScore, r.LayoutScore, r.FontScore, r.PageScore);
+                Console.WriteLine("  {0,-46} {1,7:0.0} {2,7:0.0} {3,7:0.0} {4,7} {5,7:0.0}",
+                    Shorten(r.Name, 46), r.OverallScore, r.TextScore, r.LayoutScore,
+                    options.Ocr ? "-" : r.FontScore.ToString("0.0", CultureInfo.InvariantCulture), r.PageScore);
             }
         }
 
         /// <summary>The same figures over whichever set of documents is handed in.</summary>
-        private static void PrintAggregate(List<DocResult> docs)
+        private static void PrintAggregate(List<DocResult> docs, Options options)
         {
             double overall = 0, content = 0, order = 0, misplaced = 0, visual = 0;
             int pageDiff = 0, fontMissing = 0, textLost = 0, orderBad = 0, visualCount = 0;
@@ -690,6 +699,9 @@ namespace PdfQualityCompare
             var bySymbol = new Dictionary<string, int>(StringComparer.Ordinal);
             long movedPairs = 0, movedChars = 0, movedCancelled = 0;
             int movedDocs = 0;
+            double agreement = 0;
+            long same = 0, different = 0, onlyRef = 0, onlyCand = 0;
+            long readAlike = 0, spacing = 0, ignoredDiffs = 0, ignoredRef = 0, ignoredCand = 0;
 
             foreach (DocResult r in docs)
             {
@@ -702,8 +714,18 @@ namespace PdfQualityCompare
                 if (r.LostWords > 0) textLost++;
                 if (r.ReadingOrderSimilarity < r.ContentSimilarity - 0.02) orderBad++;
                 if (r.VisualRun && !double.IsNaN(r.VisualDiffPct)) { visual += r.VisualDiffPct; visualCount++; }
+                agreement += r.OcrAgreement;
+                same += r.OcrSameWords;
+                different += r.OcrDifferentWords;
+                onlyRef += r.OcrOnlyReference;
+                onlyCand += r.OcrOnlyCandidate;
+                ignoredRef += r.ReferenceIgnoredWords;
+                ignoredCand += r.CandidateIgnoredWords;
                 if (r.TextDiffRun)
                 {
+                    readAlike += r.OcrReadingOrderDiffs;
+                    spacing += r.OcrSpacingDiffs;
+                    ignoredDiffs += r.IgnoredTextDiffs;
                     annotations += r.TextDiffAnnotations;
                     candAnnotations += r.CandidateDiffAnnotations;
                     refAnnotations += r.ReferenceDiffAnnotations;
@@ -740,9 +762,22 @@ namespace PdfQualityCompare
             Console.WriteLine("Mean reading order sim. : {0:0.00}%", 100.0 * order / n);
             Console.WriteLine("Pages added or dropped  : {0} ({1:0.0}%)", pageDiff, 100.0 * pageDiff / n);
             Console.WriteLine("Text lost               : {0} ({1:0.0}%)", textLost, 100.0 * textLost / n);
-            Console.WriteLine("Missing font(s)         : {0} ({1:0.0}%)", fontMissing, 100.0 * fontMissing / n);
+            if (!options.Ocr)
+                Console.WriteLine("Missing font(s)         : {0} ({1:0.0}%)", fontMissing, 100.0 * fontMissing / n);
             Console.WriteLine("Reading order scrambled : {0} ({1:0.0}%)", orderBad, 100.0 * orderBad / n);
             Console.WriteLine("Mean misplaced words    : {0:0.0}%", misplaced / n);
+            if (ignoredRef + ignoredCand > 0)
+                Console.WriteLine("Ignored text            : {0} word(s) struck out of {1}, {2} of {3}",
+                    ignoredRef, options.ReferenceLabel, ignoredCand, options.CandidateLabel);
+            if (options.Ocr)
+            {
+                // Agreement is per place on the page, so it says how often the engines read
+                // the same thing - the question the text and layout figures answer only
+                // indirectly for OCR.
+                Console.WriteLine("Mean OCR word agreement : {0:0.00}%", 100.0 * agreement / n);
+                Console.WriteLine("OCR words               : {0} read alike, {1} read differently, {2} only in {3}, {4} only in {5}",
+                    same, different, onlyRef, options.ReferenceLabel, onlyCand, options.CandidateLabel);
+            }
             if (annotated > 0)
             {
                 // The candidate's own marks lead, because that is the run being assessed.
@@ -761,6 +796,11 @@ namespace PdfQualityCompare
                     Console.WriteLine("Moved text cancelled    : {0} of {1} pair(s) over {2} document(s), {3} chars; " +
                         "{4} kept as genuinely moved",
                         movedCancelled, movedPairs, movedDocs, movedChars, movedPairs - movedCancelled);
+                if (ignoredDiffs > 0)
+                    Console.WriteLine("Ignored text removed    : {0} difference(s)", ignoredDiffs);
+                if (readAlike + spacing > 0)
+                    Console.WriteLine("OCR read-alike removed  : {0} difference(s) read the same in the same place, " +
+                        "{1} spacing only", readAlike, spacing);
             }
             if (visualCount > 0)
                 Console.WriteLine("Mean pixel difference   : {0:0.00}%", visual / visualCount);

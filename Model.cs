@@ -96,6 +96,9 @@ namespace PdfQualityCompare
         public Dictionary<string, FontUsage> Fonts = new Dictionary<string, FontUsage>(StringComparer.Ordinal);
         public long TotalGlyphs;
         public int NonEmbeddedFontCount;
+
+        /// <summary>Words struck out as part of an --ignore-text phrase, and so absent from <see cref="Words"/>.</summary>
+        public int IgnoredWords;
     }
 
     /// <summary>A run of text that did not line up between the two documents.</summary>
@@ -172,6 +175,36 @@ namespace PdfQualityCompare
         /// pairs only. A pair that really did move is reported but kept.
         /// </summary>
         public bool Removed;
+    }
+
+    /// <summary>
+    /// One place on an OCR'd page where the two engines did not read the same word: either
+    /// both found a word there and read it differently, or only one of them found one.
+    /// </summary>
+    internal sealed class OcrWordDiff
+    {
+        public int Page;            // zero based, the reference page
+        public double Left;         // reference position where there is one, else the candidate's
+        public double Top;
+        /// <summary>What the reference read there; empty when it found nothing.</summary>
+        public string Reference;
+        /// <summary>What the candidate read there; empty when it found nothing.</summary>
+        public string Candidate;
+    }
+
+    /// <summary>
+    /// A highlighted difference that survived the OCR check: at least one word under it was
+    /// read differently, or found by only one engine. Carries what each engine read across
+    /// the highlighted area, which is also the note left on the highlights themselves.
+    /// </summary>
+    internal sealed class OcrHighlightDiff
+    {
+        public string Id;
+        public int Page;            // one based, as the annotation logs number pages
+        public string Reference;
+        public string Candidate;
+        /// <summary>Words under the highlights with no same-text counterpart at the same place.</summary>
+        public int DisagreedWords;
     }
 
     /// <summary>The comparison of one document pair.</summary>
@@ -298,6 +331,43 @@ namespace PdfQualityCompare
         public string HighlightError;
         /// <summary>Dump of every annotation on both sides, including each one's raw dictionary.</summary>
         public string AnnotationLogPath;
+
+        // --- ignored text and OCR ---
+        /// <summary>Words struck out of each side as part of an --ignore-text phrase.</summary>
+        public int ReferenceIgnoredWords;
+        public int CandidateIgnoredWords;
+
+        /// <summary>The positional OCR comparison below was run (--ocr).</summary>
+        public bool OcrRun;
+        /// <summary>Places where both engines found a word and read it the same.</summary>
+        public int OcrSameWords;
+        /// <summary>Places where both engines found a word and read it differently.</summary>
+        public int OcrDifferentWords;
+        /// <summary>Reference words with no candidate word at the same place.</summary>
+        public int OcrOnlyReference;
+        /// <summary>Candidate words with no reference word at the same place.</summary>
+        public int OcrOnlyCandidate;
+        /// <summary>2 x same / (reference words + candidate words), 0..1.</summary>
+        public double OcrAgreement;
+        /// <summary>The places the engines disagreed, in page order, capped for the report.</summary>
+        public List<OcrWordDiff> OcrWordDiffs = new List<OcrWordDiff>();
+
+        /// <summary>
+        /// Highlighted differences struck off both documents because every word under them
+        /// was read the same, in the same place, by the other engine: only the order the
+        /// comparison walked the page in differed. Not included in TextDiffDifferences.
+        /// </summary>
+        public int OcrReadingOrderDiffs;
+        /// <summary>Highlighted differences struck off because they were only --ignore-text phrases.</summary>
+        public int IgnoredTextDiffs;
+        /// <summary>Highlighted differences struck off because they covered no words and only changed spacing (--ocr).</summary>
+        public int OcrSpacingDiffs;
+        /// <summary>Highlight annotations those two removed, across both sides.</summary>
+        public int OcrFilterAnnotations;
+        /// <summary>The highlighted differences that were kept, with what each engine read.</summary>
+        public List<OcrHighlightDiff> OcrHighlights = new List<OcrHighlightDiff>();
+        /// <summary>The saved reference carrying the highlights, written in OCR mode where both sides matter.</summary>
+        public string HighlightReferencePdfPath;
 
         // --- optional raster comparison ---
         public bool VisualRun;
