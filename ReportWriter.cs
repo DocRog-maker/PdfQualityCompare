@@ -249,7 +249,7 @@ namespace PdfQualityCompare
             // to the index that holds the rest.
             sb.Append(",\"indexHref\":").Append(options.Candidates.Count > 1 ? Js("../index.html") : "null");
             sb.Append(",\"pdfName\":").Append(Js(options.PdfName));
-            sb.Append(",\"mode\":").Append(Js(options.Mode == LayoutMode.Flat ? "flat" : "qualitron"));
+            sb.Append(",\"mode\":").Append(Js(Options.ModeName(options.Mode)));
             sb.Append(",\"layoutTolerance\":").Append(Jn(options.LayoutTolerance));
             sb.Append(",\"visual\":").Append(options.Visual ? "true" : "false");
             sb.Append(",\"ocr\":").Append(options.Ocr ? "true" : "false");

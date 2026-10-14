@@ -28,20 +28,43 @@ document compared across the runs:
   042015.pdf
 ```
 
-Either way the same document names must appear in every root, and a name present in some
+**Output mode** is a folder where the converted PDFs sit beside their source files, as
+the conversion and OCR samples leave them. Only PDFs with `output` in their name are
+compared; everything else is an input and is ignored. The first part of the name is the
+source document and the tool that made it comes next, so these two are one document:
+
+```
+apply-ocr-to-pdf/                         apryse-ocr-to-pdf/
+  042117.pdf              (ignored)         042117.pdf                  (ignored)
+  042117-nutrient-output.pdf                042117-apryse-output.pdf
+  input_image_based-output.pdf              input_image_based-apryse-output.pdf
+```
+
+The tool is not given anywhere, so it is taken to be the word just before `output` that
+most of the results in a folder share (`nutrient`, `apryse` above). A result without it,
+like `input_image_based-output.pdf`, is still read, and a document name may contain hyphens
+of its own. Anything after `output` is ignored too (`142921-output-Windows.pdf`). Two
+results in one folder that come from the same document - `142921-output.pdf` beside
+`142921-output-v1.pdf` - are reported, and the shorter name is the one compared. Each run
+is named after its tool rather than its folder, unless `--ref-label`/`--cand-label` say
+otherwise.
+
+All modes need the same document names in every root, and a name present in some
 roots but not others is reported rather than dropped.
 
-Which layout is in use is worked out from the roots themselves, so neither needs a flag:
-a root with any sub-folder holding a PDF reads as qualitron, otherwise one with PDFs
-directly in it reads as flat. Sub-folders deliberately win, because a benchmark tree
+Which layout is in use is worked out from the roots themselves, so none needs a flag:
+a root with any sub-folder holding a PDF reads as qualitron, otherwise one with a PDF
+named `...output...` directly in it reads as output, otherwise one with PDFs directly in
+it reads as flat. Sub-folders deliberately win, because a benchmark tree
 regularly carries a stray report PDF beside the document folders and that should not make
 it read as flat. The case this gets wrong is a flat folder that happens to contain a
-sub-folder of PDFs; `--mode qualitron` or `--mode flat` settles it.
+sub-folder of PDFs, or a flat folder whose documents happen to be called `output`
+something; `--mode qualitron`, `--mode flat` or `--mode output` settles it.
 
 One mode covers the whole run. A document is identified by its folder name in one layout
 and by its file name in the other, so roots that disagree would pair nothing at all — the
 run stops and says so rather than reporting every document as a missing conversion.
-`--pdf-name` applies to qualitron mode only; flat mode takes each PDF's own name.
+`--pdf-name` applies to qualitron mode only; the others take each PDF's own name.
 
 In qualitron mode a folder that holds no PDF on either side is not a document, so
 bookkeeping folders that sit alongside the conversions — `ConversionTimes`, `Report` and
@@ -56,7 +79,8 @@ nothing to skip — a file is a PDF and is a document, or it was never listed.
 PdfQualityCompare.exe -r C:\benchmark-qualitron\office -c C:\benchmark-qualitron\apryse-20260914\Generic -o C:\reports\apryse-20260914
 ```
 
-The same command reads a flat folder of PDFs; nothing but the roots changes:
+The same command reads a flat folder of PDFs, or two folders of `...-output.pdf` results;
+nothing but the roots changes:
 
 ```bash
 PdfQualityCompare.exe -r ApryseOfficeToPDF\word-pdfs -c ApryseOfficeToPDF\apryse-pdfs -o C:\reports\flat
@@ -71,7 +95,7 @@ highlighted copy of each side.
 
 | Option | Purpose |
 | --- | --- |
-| `--mode <qualitron\|flat>` | Force a root layout instead of detecting it. |
+| `--mode <qualitron\|flat\|output>` | Force a root layout instead of detecting it. |
 | `--limit <n>` / `--filter <text>` | Work on a subset while you are calibrating. |
 | `--layout-tolerance <pt>` | How far a word may move before it counts as misplaced (default 3.0). |
 | `--weights t,l,f,p` | Re-weight the overall score across text, layout, font, page. |

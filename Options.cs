@@ -21,7 +21,15 @@ namespace PdfQualityCompare
         /// The document name is the file name without the .pdf extension, so 042013.pdf
         /// in each root is one document compared across the runs.
         /// </summary>
-        Flat
+        Flat,
+
+        /// <summary>
+        /// The PDFs sit directly in the root beside their source files, and only those
+        /// with "output" in their name are compared. Each is named after its source
+        /// document and the tool that made it - 042117-apryse-output.pdf - so the document
+        /// is the first part of the name. See <see cref="OutputRoot"/>.
+        /// </summary>
+        Output
     }
 
     /// <summary>
@@ -34,6 +42,9 @@ namespace PdfQualityCompare
         public string Root;
         public string Label;
         public string OutputDir;
+
+        /// <summary>True when --cand-label named it, so the label is not replaced by a default.</summary>
+        public bool LabelGiven;
     }
 
     /// <summary>
@@ -139,6 +150,9 @@ namespace PdfQualityCompare
         /// <summary>Defaults to the reference root's own folder name.</summary>
         public string ReferenceLabel;
 
+        /// <summary>True when --ref-label named the reference.</summary>
+        public bool ReferenceLabelGiven;
+
         /// <summary>Label of the candidate this instance describes.</summary>
         public string CandidateLabel;
 
@@ -152,10 +166,16 @@ themselves unless --mode says:
               converted PDF under a fixed name (--pdf-name, default 'pdf.pdf').
   flat        The PDFs sit directly in the root, each named after its own source
               document. 042013.pdf in each root is then one document.
+  output      The PDFs sit directly in the root, and only those with 'output' in
+              their name are compared. The first part of the name is the source
+              document and the tool comes next: 042117-apryse-output.pdf and
+              042117-nutrient-output.pdf are one document.
 
 Either way the same document names must appear in every root. A root with any
-sub-folder holding a PDF reads as qualitron, otherwise one with PDFs directly in
-it reads as flat; pass --mode where that guess is wrong.
+sub-folder holding a PDF reads as qualitron, otherwise one with a PDF named
+'...output...' directly in it reads as output, otherwise one with PDFs directly
+in it reads as flat; pass --mode where that guess is wrong. In output mode a run
+is named after the tool in its file names rather than after its folder.
 
 --candidate may be given more than once. Each candidate is compared against the one
 reference and gets its own report; a combined index across all of them is written
@@ -173,9 +193,10 @@ Required:
 Options:
   --out, -o <dir>         Report output directory (default: .\pdf-quality-report).
                           With several candidates each gets a sub-folder named after it.
-  --mode <qualitron|flat> Root layout (default: detect it from the roots).
+  --mode <qualitron|flat|output>
+                          Root layout (default: detect it from the roots).
   --pdf-name <name>       PDF file name inside each document folder (default: pdf.pdf).
-                          Qualitron mode only; flat mode takes each PDF's own name.
+                          Qualitron mode only; the others take each PDF's own name.
   --filter <text>         Only compare documents whose name contains <text>.
   --limit <n>             Compare at most n documents.
   --threads <n>           Worker threads (default: CPU count - 1).
@@ -252,7 +273,7 @@ Examples:
                         string dir = Next(args, ref i, ref error);
                         if (dir != null)
                         {
-                            o.Candidates.Add(new CandidateRun { Root = dir, Label = pendingLabel });
+                            o.Candidates.Add(new CandidateRun { Root = dir, Label = pendingLabel, LabelGiven = pendingLabel != null });
                             pendingLabel = null;
                         }
                         break;
@@ -305,12 +326,18 @@ Examples:
                     case "--max-hunks":
                         o.MaxHunks = NextInt(args, ref i, ref error); break;
                     case "--ref-label":
-                        o.ReferenceLabel = Next(args, ref i, ref error); break;
+                        o.ReferenceLabel = Next(args, ref i, ref error);
+                        o.ReferenceLabelGiven = o.ReferenceLabel != null;
+                        break;
                     case "--cand-label":
                     {
                         string label = Next(args, ref i, ref error);
                         if (label == null) break;
-                        if (o.Candidates.Count > 0) o.Candidates[o.Candidates.Count - 1].Label = label;
+                        if (o.Candidates.Count > 0)
+                        {
+                            o.Candidates[o.Candidates.Count - 1].Label = label;
+                            o.Candidates[o.Candidates.Count - 1].LabelGiven = true;
+                        }
                         else pendingLabel = label;
                         break;
                     }
@@ -349,9 +376,20 @@ Examples:
                 if (!Directory.Exists(c.Root)) { error = "Candidate root not found: " + c.Root; return null; }
                 if (string.IsNullOrEmpty(c.Label)) c.Label = LeafName(c.Root, "candidate");
             }
-            MakeLabelsUnique(o.Candidates);
 
             if (o.ModeDetected && !DetectMode(o, ref error)) return null;
+
+            // Output roots tend to be sample folders with names like apply-ocr-to-pdf, and
+            // the tool is in every file name, so that is the better name for the run.
+            if (o.Mode == LayoutMode.Output)
+            {
+                string tool;
+                if (!o.ReferenceLabelGiven && (tool = OutputRoot.Read(o.ReferenceRoot).Tool) != null)
+                    o.ReferenceLabel = tool;
+                foreach (CandidateRun c in o.Candidates)
+                    if (!c.LabelGiven && (tool = OutputRoot.Read(c.Root).Tool) != null) c.Label = tool;
+            }
+            MakeLabelsUnique(o.Candidates);
 
             // Normalised the way the extracted words are, so the phrase matches whatever
             // case and punctuation options the run was given.
@@ -412,8 +450,9 @@ Examples:
             {
                 case "qualitron": o.Mode = LayoutMode.Qualitron; break;
                 case "flat": o.Mode = LayoutMode.Flat; break;
+                case "output": o.Mode = LayoutMode.Output; break;
                 default:
-                    error = "--mode must be qualitron or flat, not " + text;
+                    error = "--mode must be qualitron, flat or output, not " + text;
                     return;
             }
             o.ModeDetected = false;
@@ -463,6 +502,9 @@ Examples:
         /// tree regularly carries a stray report PDF beside the document folders and that
         /// should not make it read as a flat folder. A flat root that happens to hold a
         /// sub-folder of PDFs is the case this gets wrong, and --mode is the answer to it.
+        /// A loose PDF named "...output..." makes it an output root: those folders hold
+        /// the source files beside the results, and reading them as flat would compare
+        /// the inputs too.
         /// </summary>
         private static LayoutMode? Detect(string root)
         {
@@ -470,6 +512,7 @@ Examples:
             {
                 foreach (string d in Directory.GetDirectories(root))
                     if (HasPdf(d)) return LayoutMode.Qualitron;
+                if (OutputRoot.HasOutput(root)) return LayoutMode.Output;
                 return HasPdf(root) ? LayoutMode.Flat : (LayoutMode?)null;
             }
             catch (Exception)
@@ -486,9 +529,18 @@ Examples:
 
         public static string Describe(LayoutMode mode)
         {
-            return mode == LayoutMode.Flat
-                ? "flat (PDFs directly in the root)"
-                : "qualitron (one folder per document)";
+            switch (mode)
+            {
+                case LayoutMode.Flat: return "flat (PDFs directly in the root)";
+                case LayoutMode.Output: return "output (PDFs named <document>-<tool>-output.pdf)";
+                default: return "qualitron (one folder per document)";
+            }
+        }
+
+        /// <summary>The mode as --mode spells it.</summary>
+        public static string ModeName(LayoutMode mode)
+        {
+            return mode.ToString().ToLowerInvariant();
         }
 
         /// <summary>This configuration narrowed to the single comparison against <paramref name="c"/>.</summary>

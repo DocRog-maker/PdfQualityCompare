@@ -135,8 +135,8 @@ namespace PdfQualityCompare
             List<Pair> pairs = Discover(options, out ignored);
             if (pairs.Count == 0)
             {
-                outcome.Skipped = options.Mode == LayoutMode.Flat
-                    ? "no PDFs in either root"
+                outcome.Skipped = options.Mode == LayoutMode.Flat ? "no PDFs in either root"
+                    : options.Mode == LayoutMode.Output ? "no PDFs named '...output...' in either root"
                     : "no document folders with a '" + options.PdfName + "' on either side";
                 Console.Error.WriteLine("{0}: nothing to compare - {1}.", candidate.Label, outcome.Skipped);
                 if (ignored.Count > 0)
@@ -376,7 +376,8 @@ namespace PdfQualityCompare
             Pair pair = matches[0];
             if (pair.ReferencePdf == null || pair.CandidatePdf == null)
             {
-                Console.Error.WriteLine("{0}: no {1} on the {2} side.", pair.Name, options.PdfName,
+                Console.Error.WriteLine("{0}: no {1} on the {2} side.", pair.Name,
+                    options.Mode == LayoutMode.Qualitron ? options.PdfName : "PDF",
                     pair.ReferencePdf == null ? options.ReferenceLabel : options.CandidateLabel);
                 return 4;
             }
@@ -492,17 +493,26 @@ namespace PdfQualityCompare
 
         private static List<Pair> Discover(Options options, out List<string> ignored)
         {
-            return options.Mode == LayoutMode.Flat
-                ? DiscoverFlat(options, out ignored)
-                : DiscoverQualitron(options, out ignored);
+            switch (options.Mode)
+            {
+                case LayoutMode.Flat: return DiscoverFlat(options, out ignored);
+                case LayoutMode.Output: return DiscoverOutput(options, out ignored);
+                default: return DiscoverQualitron(options, out ignored);
+            }
         }
 
         /// <summary>What a root would have had to hold, for the message when none of them did.</summary>
         private static string Expected(Options options)
         {
-            return options.Mode == LayoutMode.Flat
-                ? "Expected PDFs directly in each root, named after their source documents."
-                : "Expected sub-folders with a '" + options.PdfName + "' inside each root.";
+            switch (options.Mode)
+            {
+                case LayoutMode.Flat:
+                    return "Expected PDFs directly in each root, named after their source documents.";
+                case LayoutMode.Output:
+                    return "Expected PDFs directly in each root named <document>-<tool>-output.pdf.";
+                default:
+                    return "Expected sub-folders with a '" + options.PdfName + "' inside each root.";
+            }
         }
 
         /// <summary>
@@ -544,6 +554,60 @@ namespace PdfQualityCompare
                 if (options.Limit > 0 && pairs.Count >= options.Limit) break;
             }
             return pairs;
+        }
+
+        /// <summary>
+        /// Only the PDFs with "output" in their name are results; the rest of the folder is
+        /// their sources. Each is keyed on the document it was made from, so
+        /// 042117-nutrient-output.pdf and 042117-apryse-output.pdf are one document.
+        /// </summary>
+        /// <param name="ignored">
+        /// Always empty. Results that could not be used are explained on the console here,
+        /// since they are files rather than the folders that list describes.
+        /// </param>
+        private static List<Pair> DiscoverOutput(Options options, out List<string> ignored)
+        {
+            ignored = new List<string>();
+            OutputRoot reference = OutputRoot.Read(options.ReferenceRoot);
+            OutputRoot candidate = OutputRoot.Read(options.CandidateRoot);
+            ReportUnused(options.ReferenceLabel, reference);
+            ReportUnused(options.CandidateLabel, candidate);
+
+            var names = new SortedSet<string>(reference.Pdfs.Keys, StringComparer.OrdinalIgnoreCase);
+            names.UnionWith(candidate.Pdfs.Keys);
+
+            var pairs = new List<Pair>();
+            foreach (string name in names)
+            {
+                if (!string.IsNullOrEmpty(options.Filter) &&
+                    name.IndexOf(options.Filter, StringComparison.OrdinalIgnoreCase) < 0) continue;
+
+                string rp, cp;
+                reference.Pdfs.TryGetValue(name, out rp);
+                candidate.Pdfs.TryGetValue(name, out cp);
+
+                pairs.Add(new Pair
+                {
+                    Name = name,
+                    ReferenceDir = options.ReferenceRoot,
+                    CandidateDir = options.CandidateRoot,
+                    ReferencePdf = rp,
+                    CandidatePdf = cp
+                });
+
+                if (options.Limit > 0 && pairs.Count >= options.Limit) break;
+            }
+            return pairs;
+        }
+
+        private static void ReportUnused(string label, OutputRoot root)
+        {
+            if (root.Duplicates.Count > 0)
+                Console.Error.WriteLine("{0}: {1} result(s) share a document with a shorter name and are not compared: {2}",
+                                        label, root.Duplicates.Count, Join(root.Duplicates, 5));
+            if (root.Unnamed.Count > 0)
+                Console.Error.WriteLine("{0}: {1} result(s) name no document before 'output' and are not compared: {2}",
+                                        label, root.Unnamed.Count, Join(root.Unnamed, 5));
         }
 
         /// <summary>Every PDF directly in <paramref name="root"/>, keyed on its name without the extension.</summary>
@@ -638,6 +702,7 @@ namespace PdfQualityCompare
         {
             // Flat roots have only the one reason: this run did not produce that file.
             if (options.Mode == LayoutMode.Flat) return "no " + pair.Name + ".pdf in the folder";
+            if (options.Mode == LayoutMode.Output) return "no " + pair.Name + "-...output.pdf in the folder";
 
             return WhyNoPdf(refSide ? pair.ReferenceDir : pair.CandidateDir, options.PdfName);
         }
