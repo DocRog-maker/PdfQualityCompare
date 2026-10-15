@@ -64,6 +64,8 @@ namespace PdfQualityCompare
                             words.Add(new PageWord { Text = token, Raw = raw, X1 = bb.x1, Y1 = bb.y1, X2 = bb.x2, Y2 = bb.y2 });
                         }
 
+                    TrimIntoNeighbouringLines(words);
+
                     if (options.IgnorePhrases.Count > 0)
                     {
                         var tokens = new List<string>(words.Count);
@@ -74,6 +76,55 @@ namespace PdfQualityCompare
                 }
             }
             return pages;
+        }
+
+        /// <summary>
+        /// Cuts back word boxes that reach into the line above or below. Some engines' text
+        /// layers come back with boxes far taller than the type: nutrient's "substances" in
+        /// 042117-p1 is 18pt tall on lines 11.5pt apart, so the middle of "manufacture" on
+        /// the next line falls inside it, and anything read from around the one word takes
+        /// in the other. Where two words overlap across the page, sit on different lines
+        /// and still overlap down it, both are cut at the midpoint between their middles.
+        /// Boxes the height of their type never reach the next line and are left as they are.
+        /// </summary>
+        private static void TrimIntoNeighbouringLines(List<PageWord> words)
+        {
+            int n = words.Count;
+            if (n < 2) return;
+
+            // Decided on the boxes as read, then applied, so the order words are met in
+            // makes no difference.
+            var top = new double[n];
+            var bottom = new double[n];
+            for (int i = 0; i < n; i++) { top[i] = words[i].Y2; bottom[i] = words[i].Y1; }
+
+            var byLeft = new List<int>(n);
+            for (int i = 0; i < n; i++) byLeft.Add(i);
+            byLeft.Sort((x, y) => words[x].X1.CompareTo(words[y].X1));
+
+            for (int a = 0; a < n; a++)
+            {
+                PageWord p = words[byLeft[a]];
+                for (int b = a + 1; b < n && words[byLeft[b]].X1 < p.X2; b++)
+                {
+                    PageWord q = words[byLeft[b]];
+                    if (q.X1 >= p.X2 || p.X1 >= q.X2) continue;    // not above one another
+
+                    // Middles closer than a third of the shorter box are the same line.
+                    double shorter = Math.Min(p.Y2 - p.Y1, q.Y2 - q.Y1);
+                    if (Math.Abs(p.MiddleY - q.MiddleY) <= shorter / 3) continue;
+
+                    int upper = p.MiddleY > q.MiddleY ? byLeft[a] : byLeft[b];
+                    int lower = upper == byLeft[a] ? byLeft[b] : byLeft[a];
+                    if (words[lower].Y2 <= words[upper].Y1) continue;    // already clear of each other
+
+                    double mid = (words[upper].MiddleY + words[lower].MiddleY) / 2;
+                    top[lower] = Math.Min(top[lower], mid);
+                    bottom[upper] = Math.Max(bottom[upper], mid);
+                }
+            }
+
+            for (int i = 0; i < n; i++) { words[i].Y2 = top[i]; words[i].Y1 = bottom[i]; }
         }
 
         /// <summary>The words of one page, one based; empty when the document has no such page.</summary>

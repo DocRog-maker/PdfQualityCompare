@@ -92,6 +92,17 @@ namespace PdfQualityCompare
                     result.TextDiffAnnotations = result.ReferenceDiffAnnotations + result.CandidateDiffAnnotations;
                     result.TextDiffRun = true;
 
+                    // Each highlight's note names its difference, so what the report lists
+                    // can be found in the saved PDFs. Only worth doing when they are saved.
+                    if (diffsDirectory != null)
+                    {
+                        string failure = null;
+                        DiffHighlights.AddIds(a, ref failure);
+                        DiffHighlights.AddIds(b, ref failure);
+                        if (failure != null && string.IsNullOrEmpty(result.HighlightError))
+                            result.HighlightError = "difference IDs: " + failure;
+                    }
+
                     // Nothing was highlighted, so a saved copy would be the candidate unchanged.
                     if (diffsDirectory != null && result.CandidateDiffAnnotations > 0)
                         result.HighlightPdfPath = Save(result, b, diffsDirectory, "candidate");

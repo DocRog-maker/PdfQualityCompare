@@ -159,6 +159,32 @@ namespace PdfQualityCompare
         }
 
         /// <summary>
+        /// Starts each highlight's note with its difference's ID - "ID 123" - so it shows in
+        /// the popup and the comments panel of any viewer, and a difference in the report or
+        /// the annotation log can be found in the PDF. Whatever note the highlight already
+        /// had, such as the OCR readings, follows on the next line.
+        /// </summary>
+        /// <param name="failure">Left alone unless a note cannot be set, and only for the first.</param>
+        public static void AddIds(PDFDoc doc, ref string failure)
+        {
+            foreach (KeyValuePair<string, List<Highlight>> diff in Collect(doc))
+                foreach (Highlight m in diff.Value)
+                {
+                    try
+                    {
+                        Annot annot = doc.GetPage(m.Page).GetAnnot(m.Index);
+                        string note = annot.GetContents();
+                        annot.SetContents("ID " + diff.Key + (string.IsNullOrEmpty(note) ? "" : "\n" + note));
+                    }
+                    catch (Exception ex)
+                    {
+                        if (string.IsNullOrEmpty(failure))
+                            failure = "ID note on page " + m.Page + ": " + ex.Message;
+                    }
+                }
+        }
+
+        /// <summary>
         /// Removes the given highlights from one document and returns how many went. Takes
         /// them all at once because removing an annotation renumbers the ones after it on
         /// its page, so every removal has to be known before the first one happens.
