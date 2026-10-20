@@ -46,6 +46,13 @@ namespace PdfQualityCompare
             /// <summary>Differences removed because they covered no words and only changed spacing.</summary>
             public int Spacing;
             public int Differences { get { return ReadingOrder + IgnoredText + Spacing; } }
+            /// <summary>
+            /// Differences redrawn around just the words the engines disagree on, because their
+            /// highlights also covered words read alike (--ocr only).
+            /// </summary>
+            public int Split;
+            /// <summary>How many more differences that made: one with three separate runs adds two.</summary>
+            public int Added;
             /// <summary>Highlight annotations removed, across both documents.</summary>
             public int Annotations;
             /// <summary>The differences left in place, with what each engine read (--ocr only).</summary>
@@ -72,6 +79,8 @@ namespace PdfQualityCompare
 
             var fromReference = new List<DiffHighlights.Highlight>();
             var fromCandidate = new List<DiffHighlights.Highlight>();
+            var splitFromReference = new List<DiffHighlights.Highlight>();
+            var splitFromCandidate = new List<DiffHighlights.Highlight>();
 
             foreach (string id in ids)
             {
@@ -104,6 +113,37 @@ namespace PdfQualityCompare
 
                 if (!options.Ocr) continue;
 
+                // A highlight over words both engines read alike is wider than what they
+                // disagree on - at worst a whole block the comparison took as moved, with a
+                // few misread words somewhere inside it. Those words are what to look at, so
+                // the difference is redrawn around them, one difference to each run.
+                if (tally.Agreed > 0 && tally.Focus.Count > 0)
+                {
+                    // A run that reads the same in both documents is the same words boxed far
+                    // enough apart not to be paired - a hyphen, or a word one engine boxed with
+                    // the space after it - and not a disagreement at all.
+                    List<List<Spot>> runs = Runs(tally.Focus).FindAll(run => !ReadsAlike(run, wordsA, wordsB));
+                    if (runs.Count == 0)
+                    {
+                        outcome.ReadingOrder++;
+                        fromReference.AddRange(marksA);
+                        fromCandidate.AddRange(marksB);
+                        continue;
+                    }
+
+                    for (int r = 0; r < runs.Count; r++)
+                    {
+                        string runId = runs.Count == 1 ? id : id + "." + (r + 1).ToString(CultureInfo.InvariantCulture);
+                        Redraw(reference, candidate, runId, DiffHighlights.TypeOf(marksA.Count > 0 ? marksA : marksB),
+                               runs[r], wordsA, wordsB, options, outcome);
+                    }
+                    outcome.Split++;
+                    outcome.Added += runs.Count - 1;
+                    splitFromReference.AddRange(marksA);
+                    splitFromCandidate.AddRange(marksB);
+                    continue;
+                }
+
                 OcrHighlightDiff kept = Readings(id, marksA, marksB, wordsA, wordsB, tally.Focus);
                 kept.DisagreedWords = tally.Disagreed;
                 outcome.Kept.Add(kept);
@@ -116,9 +156,200 @@ namespace PdfQualityCompare
                 Annotate(candidate, marksB, note, ref outcome.Error);
             }
 
+            // The highlights that were redrawn go in the same pass as those struck off, because
+            // each removal renumbers the annotations after it on the page.
+            int split = splitFromReference.Count + splitFromCandidate.Count;
+            fromReference.AddRange(splitFromReference);
+            fromCandidate.AddRange(splitFromCandidate);
             outcome.Annotations = DiffHighlights.Remove(reference, fromReference, ref outcome.Error)
-                                + DiffHighlights.Remove(candidate, fromCandidate, ref outcome.Error);
+                                + DiffHighlights.Remove(candidate, fromCandidate, ref outcome.Error)
+                                - split;
             return outcome;
+        }
+
+        /// <summary>
+        /// The disagreeing words of one difference, from both documents, gathered into runs:
+        /// words on the same line with no more than a word space between them, so a misread
+        /// phrase is one run and two misread words a line apart are two. Each run is in
+        /// reading order, and the runs are in the order they come on the page.
+        /// </summary>
+        private static List<List<Spot>> Runs(List<Spot> focus)
+        {
+            int n = focus.Count;
+            var parent = new int[n];
+            for (int i = 0; i < n; i++) parent[i] = i;
+            Func<int, int> root = null;
+            root = i => parent[i] == i ? i : (parent[i] = root(parent[i]));
+
+            for (int i = 0; i < n; i++)
+                for (int j = i + 1; j < n; j++)
+                    if (SameRun(focus[i], focus[j])) parent[root(i)] = root(j);
+
+            var groups = new Dictionary<int, List<Spot>>();
+            for (int i = 0; i < n; i++)
+            {
+                List<Spot> g;
+                if (!groups.TryGetValue(root(i), out g)) groups.Add(root(i), g = new List<Spot>());
+                g.Add(focus[i]);
+            }
+
+            var runs = new List<List<Spot>>(groups.Values);
+            runs.Sort((x, y) =>
+            {
+                Spot a = Bounds(x), b = Bounds(y);
+                int byPage = a.Page.CompareTo(b.Page);
+                if (byPage != 0) return byPage;
+                int byLine = Math.Round(b.Y2 / 4.0).CompareTo(Math.Round(a.Y2 / 4.0));
+                return byLine != 0 ? byLine : a.X1.CompareTo(b.X1);
+            });
+            return runs;
+        }
+
+        /// <summary>
+        /// Two words are one run when they share most of a line and the gap between them is
+        /// no wider than a word space - a little over half the height of the type. A short
+        /// word read alike between them, such as "to", leaves a wider gap than that.
+        /// </summary>
+        private static bool SameRun(Spot a, Spot b)
+        {
+            if (a.Page != b.Page) return false;
+            double ha = a.Y2 - a.Y1, hb = b.Y2 - b.Y1;
+            double shared = Math.Min(a.Y2, b.Y2) - Math.Max(a.Y1, b.Y1);
+            if (shared < 0.5 * Math.Min(ha, hb)) return false;
+            double gap = Math.Max(a.X1, b.X1) - Math.Min(a.X2, b.X2);
+            return gap <= 0.6 * Math.Max(ha, hb);
+        }
+
+        /// <summary>
+        /// Whether both documents read exactly the same text, and some text, around a run -
+        /// the readings its note and the report would show, which would then show nothing
+        /// to choose between.
+        /// </summary>
+        private static bool ReadsAlike(List<Spot> run, List<List<PageWord>> wordsA, List<List<PageWord>> wordsB)
+        {
+            var none = new List<DiffHighlights.Highlight>();
+            OcrHighlightDiff readings = Readings("", none, none, wordsA, wordsB, run);
+            return !string.IsNullOrEmpty(readings.Reference) &&
+                   string.Equals(readings.Reference, readings.Candidate, StringComparison.Ordinal);
+        }
+
+        private static Spot Bounds(List<Spot> spots)
+        {
+            var b = new Spot { Page = spots[0].Page, X1 = double.MaxValue, Y1 = double.MaxValue,
+                               X2 = double.MinValue, Y2 = double.MinValue };
+            foreach (Spot s in spots)
+            {
+                b.X1 = Math.Min(b.X1, s.X1); b.Y1 = Math.Min(b.Y1, s.Y1);
+                b.X2 = Math.Max(b.X2, s.X2); b.Y2 = Math.Max(b.Y2, s.Y2);
+            }
+            return b;
+        }
+
+        /// <summary>
+        /// Draws one run as a difference of its own: a highlight over each document's words
+        /// in the run's area, carrying <paramref name="id"/>, the original difference's type
+        /// and a note of both readings, and an entry among the kept differences. A document
+        /// with no words there - one engine found nothing - gets no highlight.
+        /// </summary>
+        private static void Redraw(PDFDoc reference, PDFDoc candidate, string id, string type, List<Spot> run,
+                                   List<List<PageWord>> wordsA, List<List<PageWord>> wordsB,
+                                   Options options, Outcome outcome)
+        {
+            Spot area = Bounds(run);
+            var marksA = new List<DiffHighlights.Highlight>();
+            var marksB = new List<DiffHighlights.Highlight>();
+            pdftron.PDF.Annots.Highlight drawnA = Draw(reference, area, id, type, wordsA,
+                                                        TextDiffAnnotations.ReferenceColour, marksA, ref outcome.Error);
+            pdftron.PDF.Annots.Highlight drawnB = Draw(candidate, area, id, type, wordsB,
+                                                        TextDiffAnnotations.CandidateColour, marksB, ref outcome.Error);
+
+            OcrHighlightDiff kept = Readings(id, marksA, marksB, wordsA, wordsB, run);
+            kept.DisagreedWords = run.Count;
+            outcome.Kept.Add(kept);
+
+            string note = options.ReferenceLabel + ": " + Show(kept.Reference) + "\n" +
+                          options.CandidateLabel + ": " + Show(kept.Candidate);
+            foreach (pdftron.PDF.Annots.Highlight drawn in new[] { drawnA, drawnB })
+            {
+                if (drawn == null) continue;
+                try { drawn.SetContents(note); drawn.RefreshAppearance(); }
+                catch (Exception ex)
+                {
+                    if (string.IsNullOrEmpty(outcome.Error)) outcome.Error = "note on difference " + id + ": " + ex.Message;
+                }
+            }
+        }
+
+        /// <summary>
+        /// A highlight over one document's words in <paramref name="area"/>, a piece to each
+        /// line. Returns null, and draws nothing, when the document has no words there.
+        /// </summary>
+        private static pdftron.PDF.Annots.Highlight Draw(PDFDoc doc, Spot area, string id, string type,
+                                                         List<List<PageWord>> words, double[] colour,
+                                                         List<DiffHighlights.Highlight> marks, ref string failure)
+        {
+            var inside = new List<PageWord>();
+            foreach (PageWord w in OcrPageWords.PageOf(words, area.Page))
+                if (!w.Ignored &&
+                    w.MiddleX >= area.X1 - OcrPageWords.AreaMargin && w.MiddleX <= area.X2 + OcrPageWords.AreaMargin &&
+                    w.MiddleY >= area.Y1 - OcrPageWords.AreaMargin && w.MiddleY <= area.Y2 + OcrPageWords.AreaMargin)
+                    inside.Add(w);
+            if (inside.Count == 0) return null;
+
+            inside = OcrPageWords.InReadingOrder(inside);
+            var lines = new List<Rect>();
+            foreach (PageWord w in inside)
+            {
+                int at = lines.FindIndex(l => w.MiddleY > l.y1 && w.MiddleY < l.y2);
+                if (at < 0) { lines.Add(new Rect(w.X1, w.Y1, w.X2, w.Y2)); continue; }
+                Rect l2 = lines[at];
+                lines[at] = new Rect(Math.Min(l2.x1, w.X1), Math.Min(l2.y1, w.Y1), Math.Max(l2.x2, w.X2), Math.Max(l2.y2, w.Y2));
+            }
+
+            try
+            {
+                Page page = doc.GetPage(area.Page);
+                if (page == null || !page.IsValid()) return null;
+
+                double x1 = double.MaxValue, y1 = double.MaxValue, x2 = double.MinValue, y2 = double.MinValue;
+                foreach (Rect l in lines)
+                {
+                    x1 = Math.Min(x1, l.x1); y1 = Math.Min(y1, l.y1);
+                    x2 = Math.Max(x2, l.x2); y2 = Math.Max(y2, l.y2);
+                }
+
+                var drawn = pdftron.PDF.Annots.Highlight.Create(doc.GetSDFDoc(), new Rect(x1, y1, x2, y2));
+                for (int i = 0; i < lines.Count; i++)
+                {
+                    Rect l = lines[i];
+                    drawn.SetQuadPoint(i, new QuadPoint(new Point(l.x1, l.y1), new Point(l.x2, l.y1),
+                                                        new Point(l.x2, l.y2), new Point(l.x1, l.y2)));
+                }
+                drawn.SetColor(new ColorPt(colour[0], colour[1], colour[2]), 3);
+                drawn.SetOpacity(TextDiffAnnotations.Opacity);
+                drawn.SetTitle(OcrPageWords.Join(inside));
+                drawn.SetCustomData(DiffHighlights.IdKey, id);
+                drawn.SetCustomData(DiffHighlights.TypeKey, type);
+                drawn.RefreshAppearance();
+                page.AnnotPushBack(drawn);
+
+                var mark = new DiffHighlights.Highlight
+                {
+                    Page = area.Page,
+                    Index = page.GetNumAnnots() - 1,
+                    Title = OcrPageWords.Join(inside),
+                    Type = type,
+                    Area = new Rect(x1, y1, x2, y2)
+                };
+                mark.Quads.AddRange(lines);
+                marks.Add(mark);
+                return drawn;
+            }
+            catch (Exception ex)
+            {
+                if (string.IsNullOrEmpty(failure)) failure = "redrawing difference " + id + ": " + ex.Message;
+                return null;
+            }
         }
 
         private sealed class Tally

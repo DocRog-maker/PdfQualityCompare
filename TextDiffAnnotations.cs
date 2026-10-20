@@ -80,10 +80,12 @@ namespace PdfQualityCompare
                     result.IgnoredTextDiffs = ocr.IgnoredText;
                     result.OcrSpacingDiffs = ocr.Spacing;
                     result.OcrFilterAnnotations = ocr.Annotations;
+                    result.OcrSplitDiffs = ocr.Split;
+                    result.OcrSplitAdded = ocr.Added;
                     result.OcrHighlights = ocr.Kept;
 
                     result.TextDiffDifferences =
-                        Math.Max(0, differences - symbols.Diffs.Count - moved.Differences - ocr.Differences);
+                        Math.Max(0, differences - symbols.Diffs.Count - moved.Differences - ocr.Differences + ocr.Added);
                     // The comparison's own highlights, counted by finding them: it clears
                     // the annotations a document arrived with, so measuring the growth in
                     // the annotation total undercounts every document that had any.
@@ -196,7 +198,8 @@ namespace PdfQualityCompare
                     writer.WriteLine("Generated   : {0:yyyy-MM-dd HH:mm:ss}", DateTime.Now);
                     // Two IDs go per cancelled pair, so that is what the count lost.
                     int struckOff = result.SuppressedSymbolDiffs.Count + 2 * result.MovedTextRemoved +
-                                    result.OcrReadingOrderDiffs + result.IgnoredTextDiffs + result.OcrSpacingDiffs;
+                                    result.OcrReadingOrderDiffs + result.IgnoredTextDiffs + result.OcrSpacingDiffs -
+                                    result.OcrSplitAdded;
                     if (struckOff > 0)
                         writer.WriteLine("Differences : {0} kept of the {1} HighlightTextDiff reported",
                             result.TextDiffDifferences, result.TextDiffDifferences + struckOff);
@@ -288,6 +291,11 @@ namespace PdfQualityCompare
                                  "and only adding or taking away a space", result.OcrSpacingDiffs);
             if (result.IgnoredTextDiffs + result.OcrReadingOrderDiffs + result.OcrSpacingDiffs > 0)
                 writer.WriteLine("              {0} annotation(s) removed by these", result.OcrFilterAnnotations);
+
+            if (result.OcrSplitDiffs > 0)
+                writer.WriteLine("Split       : {0} difference(s) also covering words read alike, redrawn around the " +
+                                 "words the engines disagree on as {1}", result.OcrSplitDiffs,
+                                 result.OcrSplitDiffs + result.OcrSplitAdded);
 
             if (result.OcrHighlights.Count == 0) return;
             writer.WriteLine("Kept        : {0} difference(s); what each engine read around the words they disagree on:",
@@ -448,13 +456,18 @@ namespace PdfQualityCompare
             return name.Length > 120 ? name.Substring(0, 120) : name;
         }
 
+        /// <summary>Highlight colours and opacity, shared with the highlights the OCR check draws itself.</summary>
+        public static readonly double[] ReferenceColour = { 0.95, 0.35, 0.35 };   // what went away
+        public static readonly double[] CandidateColour = { 0.35, 0.75, 0.45 };   // what arrived
+        public const double Opacity = 0.4;
+
         private static TextDiffOptions BuildOptions(Options options)
         {
             var opts = new TextDiffOptions();
-            opts.SetColorA(new ColorPt(0.95, 0.35, 0.35));   // reference: what went away
-            opts.SetColorB(new ColorPt(0.35, 0.75, 0.45));   // candidate: what arrived
-            opts.SetOpacityA(0.4);
-            opts.SetOpacityB(0.4);
+            opts.SetColorA(new ColorPt(ReferenceColour[0], ReferenceColour[1], ReferenceColour[2]));
+            opts.SetColorB(new ColorPt(CandidateColour[0], CandidateColour[1], CandidateColour[2]));
+            opts.SetOpacityA(Opacity);
+            opts.SetOpacityB(Opacity);
 
             // Moved text is reported separately by our own metrics, so leave it out of the
             // count by default rather than inflating every table-heavy document.

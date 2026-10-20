@@ -56,8 +56,9 @@ namespace PdfQualityCompare
                 100 * r.OcrAgreement, r.OcrSameWords, r.OcrDifferentWords,
                 options.ReferenceLabel, r.OcrOnlyReference, options.CandidateLabel, r.OcrOnlyCandidate);
             if (r.TextDiffRun)
-                Console.WriteLine("  highlighted differences: {0} kept; removed {1} read alike in the same place, {2} spacing only",
-                    r.OcrHighlights.Count, r.OcrReadingOrderDiffs, r.OcrSpacingDiffs);
+                Console.WriteLine("  highlighted differences: {0} kept; removed {1} read alike in the same place, {2} spacing only; " +
+                                  "{3} cut down to the words that disagree",
+                    r.OcrHighlights.Count, r.OcrReadingOrderDiffs, r.OcrSpacingDiffs, r.OcrSplitDiffs);
             Console.WriteLine();
 
             if (r.OcrHighlights.Count > 0)

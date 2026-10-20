@@ -812,6 +812,7 @@ namespace PdfQualityCompare
             int movedDocs = 0;
             double agreement = 0;
             long same = 0, different = 0, onlyRef = 0, onlyCand = 0;
+            long split = 0, splitInto = 0;
             long readAlike = 0, spacing = 0, ignoredDiffs = 0, ignoredRef = 0, ignoredCand = 0;
 
             foreach (DocResult r in docs)
@@ -835,6 +836,8 @@ namespace PdfQualityCompare
                 if (r.TextDiffRun)
                 {
                     readAlike += r.OcrReadingOrderDiffs;
+                    split += r.OcrSplitDiffs;
+                    splitInto += r.OcrSplitDiffs + r.OcrSplitAdded;
                     spacing += r.OcrSpacingDiffs;
                     ignoredDiffs += r.IgnoredTextDiffs;
                     annotations += r.TextDiffAnnotations;
@@ -912,6 +915,9 @@ namespace PdfQualityCompare
                 if (readAlike + spacing > 0)
                     Console.WriteLine("OCR read-alike removed  : {0} difference(s) read the same in the same place, " +
                         "{1} spacing only", readAlike, spacing);
+                if (split > 0)
+                    Console.WriteLine("OCR differences split  : {0} also covering words read alike, cut down to " +
+                        "{1} around the words that disagree", split, splitInto);
             }
             if (visualCount > 0)
                 Console.WriteLine("Mean pixel difference   : {0:0.00}%", visual / visualCount);

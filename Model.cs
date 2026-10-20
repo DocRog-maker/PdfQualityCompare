@@ -377,6 +377,13 @@ namespace PdfQualityCompare
         public int OcrSpacingDiffs;
         /// <summary>Highlight annotations those two removed, across both sides.</summary>
         public int OcrFilterAnnotations;
+        /// <summary>
+        /// Kept differences whose highlights also covered words read alike, redrawn around just
+        /// the words the engines disagree on, one difference to each run of them (--ocr).
+        /// </summary>
+        public int OcrSplitDiffs;
+        /// <summary>The extra differences that made, which are included in TextDiffDifferences.</summary>
+        public int OcrSplitAdded;
         /// <summary>The highlighted differences that were kept, with what each engine read.</summary>
         public List<OcrHighlightDiff> OcrHighlights = new List<OcrHighlightDiff>();
         /// <summary>The saved reference carrying the highlights, written in OCR mode where both sides matter.</summary>

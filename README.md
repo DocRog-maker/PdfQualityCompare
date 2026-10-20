@@ -132,7 +132,13 @@ things change:
   other. Whole runs are then highlighted that both engines read identically. A difference
   is removed from both documents when every word under it was read the same at the same
   place by the other engine, when it is only an `--ignore-text` phrase, or when it covers no
-  words at all and only adds or removes a space. Each highlight that is kept gets a note
+  words at all and only adds or removes a space. A difference that is kept but also covers
+  words both engines read alike - at worst a whole block the comparison took as moved, with
+  a few misread words inside it - is redrawn around just the words they disagree on, one
+  difference to each run of them on a line, numbered from the original (`203.1`, `203.2`,
+  ...). A run whose readings come out the same on both sides is dropped. This makes the
+  difference count higher than the comparison's own, since one block can hold many
+  disagreements. Each highlight that is kept gets a note
   with what both engines read around the words they disagree on, and the reference is
   saved highlighted as well as the candidate (`diffs\<doc>.highlight-reference.pdf`). The
   same readings are in the report, the `--explain` output and the annotation log.
