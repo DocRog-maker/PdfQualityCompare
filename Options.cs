@@ -129,6 +129,9 @@ namespace PdfQualityCompare
 
         /// <summary>Rasterise both PDFs and measure the pixel difference. Accurate but slow.</summary>
         public bool Visual;
+
+        /// <summary>Write a copy of each side with the order its text is read in drawn over it.</summary>
+        public bool ReadingOrder = true;
         public double VisualDpi = 72;
 
         /// <summary>Grey-level delta (0-255) above which two pixels count as different.</summary>
@@ -221,6 +224,8 @@ Options:
   --no-annotations        Skip the Apryse HighlightTextDiff pass, so no annotation counts
                           are reported and no highlighted PDFs are written.
   --highlight-moves       Let that comparison also highlight moved text (counts moves as differences).
+  --no-reading-order      Skip the copies of each side with every text line boxed and
+                          numbered in the order it is read (reading-order\).
   --visual                Also rasterise and measure pixel differences (slow).
   --visual-dpi <n>        DPI for the raster comparison (default: 72).
   --visual-threshold <n>  Grey delta 0-255 counted as a pixel difference (default: 32).
@@ -317,6 +322,8 @@ Examples:
                         o.Annotations = false; break;
                     case "--highlight-moves":
                         o.HighlightMoves = true; break;
+                    case "--no-reading-order":
+                        o.ReadingOrder = false; break;
                     case "--visual":
                         o.Visual = true; break;
                     case "--visual-dpi":

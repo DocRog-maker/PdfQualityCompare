@@ -101,6 +101,7 @@ highlighted copy of each side.
 | `--weights t,l,f,p` | Re-weight the overall score across text, layout, font, page. |
 | `--explain <name>` | Diagnose a single document instead of running a batch. |
 | `--visual-dpi <n>` | Comparison resolution; rendering happens at twice this. |
+| `--no-reading-order` | Skip the copies of both PDFs that show the order their text is read in. |
 | `--no-annotations` | Skip the Apryse `HighlightTextDiff` pass (it costs about 5s per 100 documents). |
 | `--highlight-moves` | Let that pass mark moved text too, which counts moves as differences. |
 | `--ocr` | Both runs are OCR of the same scans; see below. |
@@ -248,6 +249,20 @@ With a single candidate, written to the `--out` directory:
   the Apryse TextExtractor reads from each PDF in reading order, with a form feed between
   pages, so the two sides can be read or diffed with any tool. A side with no PDF, or one
   that is password protected, gets no file.
+- **`reading-order/`** — `<document>.reference.pdf` and
+  `<document>.candidate.pdf`, copies with every text line the TextExtractor returns boxed
+  and numbered in the order it reads them - the same order as the text in `text/` - for a
+  quick visual check that the reading order is right. The boxes are coloured along the
+  Viridis scale, dark purple for the first line on the page to yellow for the last, and
+  numbering and colour start again on each page. A page with more than 12 lines runs
+  through the colours again every 12, so a jump from yellow back to purple marks each
+  restart; the numbers carry on. Wherever the next line is not simply further along the
+  same line or the line below, a red arrow runs from the end of one to the start of the
+  next. The arrows are Line annotations by the author `Reading order`, noted
+  `Page 6: line 59 → 60`, so a viewer's comment panel can be filtered to them to step
+  through the places the order jumps. Moving to the top of the next column is one of
+  those jumps, so a clean two-column page still has an arrow there.
+  `--no-reading-order` skips the copies and the folder is not created.
 
 With several candidates those move into a sub-folder per candidate, named after it,
 and `--out` itself holds the comparison between them:

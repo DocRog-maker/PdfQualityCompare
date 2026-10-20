@@ -168,6 +168,9 @@ namespace PdfQualityCompare
             string textDir = Path.Combine(options.OutputDir, "text");
             Directory.CreateDirectory(textDir);
 
+            string orderDir = options.ReadingOrder ? Path.Combine(options.OutputDir, "reading-order") : null;
+            if (orderDir != null) Directory.CreateDirectory(orderDir);
+
             var results = new DocResult[pairs.Count];
             int done = 0;
             // Workers inside a comparison right now, and the highest count already drawn.
@@ -187,6 +190,8 @@ namespace PdfQualityCompare
                 {
                     results[i] = CompareOne(pairs[i], options, diffsDir);
                     TextExport.Write(pairs[i].Name, pairs[i].ReferencePdf, pairs[i].CandidatePdf, textDir);
+                    if (orderDir != null)
+                        ReadingOrderOverlay.Write(pairs[i].Name, pairs[i].ReferencePdf, pairs[i].CandidatePdf, orderDir);
 
                     Interlocked.Add(ref busyTicks, Stopwatch.GetTimestamp() - started);
                     int n = Interlocked.Increment(ref done);
@@ -240,6 +245,7 @@ namespace PdfQualityCompare
                     Console.WriteLine("          {0} could not be written; their counts are still reported.", failed);
             }
             Console.WriteLine("Text    : {0}", textDir);
+            if (orderDir != null) Console.WriteLine("Order   : {0}", orderDir);
             Console.WriteLine("Report  : {0}", html);
             Console.WriteLine("CSV     : {0}", csv);
             Console.WriteLine("Details : {0}", json);
