@@ -9,23 +9,26 @@ namespace PdfQualityCompare
     /// <summary>
     /// Writes a copy of each side of a pair with the order its text is read in drawn over
     /// the page, as a quick visual check that the reading order is right: every line the
-    /// Apryse TextExtractor returns gets a box and its sequence number, coloured along the
-    /// Viridis scale from dark purple (first) to yellow (last).
+    /// Apryse TextExtractor returns gets a box and its sequence number, coloured along a
+    /// scale from first to last: Turbo (dark blue through green and yellow to dark red) by
+    /// default, or Viridis (dark purple to yellow) with --palette viridis.
     ///
     /// The lines are taken exactly as the text export takes them, so the overlay shows the
     /// order the text in <c>text\</c> comes out in. Numbering and colour start again on
     /// each page. A page with more lines than one gradient can tell apart runs through the
-    /// gradient again every <see cref="PerGradient"/> lines, so a jump from yellow back to
-    /// purple marks each restart and the numbers carry on regardless.
+    /// gradient again every <see cref="PerGradient"/> lines, so a jump from the last colour
+    /// back to the first marks each restart and the numbers carry on regardless.
     ///
     /// The marks are drawn into the page content rather than as annotations: a page can
     /// have hundreds of lines, and the copy is for looking at, not editing.
     /// </summary>
+    internal enum Palette { Turbo, Viridis }
+
     internal static class ReadingOrderOverlay
     {
         /// <summary>
-        /// Lines to one run of the gradient. Viridis is perceptually even, but past about a
-        /// dozen steps neighbouring colours stop being easy to tell apart at a glance.
+        /// Lines to one run of the gradient. Past about a dozen steps neighbouring colours
+        /// stop being easy to tell apart at a glance, in either palette.
         /// </summary>
         private const int PerGradient = 12;
 
@@ -37,7 +40,7 @@ namespace PdfQualityCompare
         /// Viridis at nine evenly spaced points, from matplotlib's definition; the colours
         /// between are interpolated, which is within a shade of the full table.
         /// </summary>
-        private static readonly double[][] Viridis =
+        private static readonly double[][] ViridisStops =
         {
             new[] { 68, 1, 84.0 }, new[] { 72, 40, 120.0 }, new[] { 62, 74, 137.0 },
             new[] { 49, 104, 142.0 }, new[] { 38, 130, 142.0 }, new[] { 31, 158, 137.0 },
@@ -49,10 +52,11 @@ namespace PdfQualityCompare
         /// A side with no PDF gets no file. Never throws: like the text export, this is a
         /// by-product, and a document it fails on should still be compared.
         /// </summary>
-        public static void Write(string name, string referencePdf, string candidatePdf, string directory)
+        public static void Write(string name, string referencePdf, string candidatePdf, string directory,
+                                 Palette palette)
         {
-            if (referencePdf != null) WriteOne(referencePdf, Target(directory, name, "reference"));
-            if (candidatePdf != null) WriteOne(candidatePdf, Target(directory, name, "candidate"));
+            if (referencePdf != null) WriteOne(referencePdf, Target(directory, name, "reference"), palette);
+            if (candidatePdf != null) WriteOne(candidatePdf, Target(directory, name, "candidate"), palette);
         }
 
         private static string Target(string directory, string name, string side)
@@ -62,7 +66,7 @@ namespace PdfQualityCompare
             return Path.Combine(directory, name + "." + side + ".pdf");
         }
 
-        private static void WriteOne(string pdf, string target)
+        private static void WriteOne(string pdf, string target, Palette palette)
         {
             PDFDoc doc = null;
             try
@@ -85,7 +89,7 @@ namespace PdfQualityCompare
                         // not read back as text.
                         List<Rect> lines = Lines(te, page);
                         if (lines.Count == 0) continue;
-                        Draw(page, lines, font, builder, writer);
+                        Draw(page, lines, font, builder, writer, palette);
                         Jumps(doc, page, p, lines);
                     }
                 }
@@ -118,7 +122,8 @@ namespace PdfQualityCompare
             return lines;
         }
 
-        private static void Draw(Page page, List<Rect> lines, Font font, ElementBuilder builder, ElementWriter writer)
+        private static void Draw(Page page, List<Rect> lines, Font font, ElementBuilder builder, ElementWriter writer,
+                                 Palette palette)
         {
             writer.Begin(page, ElementWriter.WriteMode.e_overlay);
             builder.Reset();
@@ -129,7 +134,8 @@ namespace PdfQualityCompare
             for (int i = 0; i < lines.Count; i++)
             {
                 Rect box = lines[i];
-                double[] rgb = Colour(per == 1 ? 0 : (double)(i % per) / (per - 1));
+                double t = per == 1 ? 0 : (double)(i % per) / (per - 1);
+                double[] rgb = palette == Palette.Viridis ? Viridis(t) : Turbo(t);
                 var colour = new ColorPt(rgb[0], rgb[1], rgb[2]);
 
                 // The line's box, outlined and faintly filled so the text stays readable.
@@ -190,8 +196,19 @@ namespace PdfQualityCompare
             writer.WriteElement(builder.CreateTextEnd());
         }
 
-        /// <summary>Author of the jump arrows, so a viewer's comment list can be filtered to them.</summary>
+        /// <summary>
+        /// Title (shown as the author) of a green arrow - a jump that neither crosses other text
+        /// nor goes back up the page. The red and blue ones are titled by what is wrong.
+        /// </summary>
         public const string JumpAuthor = "Reading order";
+
+        /// <summary>
+        /// Arrow line width. Viewers size the arrowhead from it, so this sets the head too:
+        /// thin enough that the heads do not hide the start of the line they point at.
+        /// </summary>
+        private const double ArrowWidth = 1.25;
+
+        /// <summary>Subject of every arrow, whatever its colour, so a viewer can be filtered to all of them.</summary>
         private const string JumpSubject = "Reading order jump";
 
         /// <summary>
@@ -211,23 +228,93 @@ namespace PdfQualityCompare
                 var start = new Point(from.x2, (from.y1 + from.y2) / 2);
                 var end = new Point(to.x1, (to.y1 + to.y2) / 2);
 
+                // Going back up the page decides first; crossing other text only on the way down.
+                ColorPt colour;
+                string title;
+                if (end.y - start.y > 0.5 * Math.Min(from.Height(), to.Height()))
+                {
+                    colour = new ColorPt(0.9, 0.1, 0.1);
+                    title = UpwardsTitle;
+                }
+                else if (CrossesOtherText(start, end, lines, i, i + 1))
+                {
+                    colour = new ColorPt(0.1, 0.35, 0.95);
+                    title = CrossesTitle;
+                }
+                else
+                {
+                    colour = new ColorPt(0.1, 0.65, 0.2);
+                    title = JumpAuthor;
+                }
+
                 var arrow = pdftron.PDF.Annots.Line.Create(doc.GetSDFDoc(),
                     new Rect(Math.Min(start.x, end.x) - 4, Math.Min(start.y, end.y) - 4,
                              Math.Max(start.x, end.x) + 4, Math.Max(start.y, end.y) + 4));
                 arrow.SetStartPoint(start);
                 arrow.SetEndPoint(end);
-                arrow.SetEndStyle(pdftron.PDF.Annots.Line.EndingStyle.e_ClosedArrow);
-                arrow.SetColor(new ColorPt(0.9, 0.1, 0.1), 3);
-                arrow.SetInteriorColor(new ColorPt(0.9, 0.1, 0.1), 3);
-                arrow.SetBorderStyle(new Annot.BorderStyle(Annot.BorderStyle.Style.e_solid, 1.5));
+                arrow.SetEndStyle(pdftron.PDF.Annots.Line.EndingStyle.e_OpenArrow);
+                arrow.SetColor(colour, 3);
+                arrow.SetInteriorColor(colour, 3);
+                arrow.SetBorderStyle(new Annot.BorderStyle(Annot.BorderStyle.Style.e_solid, ArrowWidth));
                 arrow.SetOpacity(0.85);
-                arrow.SetTitle(JumpAuthor);
+                arrow.SetTitle(title);
                 arrow.SetSubject(JumpSubject);
                 arrow.SetContents(string.Format(CultureInfo.InvariantCulture,
                     "Page {0}: line {1} → {2}", pageNumber, i + 1, i + 2));
                 arrow.RefreshAppearance();
                 page.AnnotPushBack(arrow);
             }
+        }
+
+        /// <summary>Title of a blue arrow, one that passes over text other than the two lines it joins.</summary>
+        private const string CrossesTitle = "Crosses other text";
+
+        /// <summary>Title of a red arrow, one pointing back up the page.</summary>
+        private const string UpwardsTitle = "Next text is above current";
+
+        /// <summary>
+        /// Whether the arrow from <paramref name="start"/> to <paramref name="end"/> passes
+        /// over any line but the two it joins. Each line is judged by the middle half of its
+        /// height and a point in from each end: some text layers pad their boxes into the
+        /// lines either side, and an arrow leaving the end of a line would otherwise always
+        /// clip the padding of the line below.
+        /// </summary>
+        private static bool CrossesOtherText(Point start, Point end, List<Rect> lines, int fromIndex, int toIndex)
+        {
+            for (int k = 0; k < lines.Count; k++)
+            {
+                if (k == fromIndex || k == toIndex) continue;
+                Rect r = lines[k];
+                double quarter = r.Height() / 4;
+                if (SegmentMeetsBox(start.x, start.y, end.x, end.y,
+                                    r.x1 + 1, r.y1 + quarter, r.x2 - 1, r.y2 - quarter))
+                    return true;
+            }
+            return false;
+        }
+
+        /// <summary>Whether a line segment touches a box, by clipping it to the box (Liang-Barsky).</summary>
+        private static bool SegmentMeetsBox(double x0, double y0, double x1, double y1,
+                                            double left, double bottom, double right, double top)
+        {
+            if (left >= right || bottom >= top) return false;
+            double dx = x1 - x0, dy = y1 - y0;
+            double tMin = 0, tMax = 1;
+            double[] p = { -dx, dx, -dy, dy };
+            double[] q = { x0 - left, right - x0, y0 - bottom, top - y0 };
+            for (int i = 0; i < 4; i++)
+            {
+                if (p[i] == 0)
+                {
+                    if (q[i] < 0) return false;    // parallel to this edge and outside it
+                    continue;
+                }
+                double t = q[i] / p[i];
+                if (p[i] < 0) tMin = Math.Max(tMin, t);
+                else tMax = Math.Min(tMax, t);
+                if (tMin > tMax) return false;
+            }
+            return true;
         }
 
         /// <summary>
@@ -254,15 +341,30 @@ namespace PdfQualityCompare
         }
 
         /// <summary>Viridis at <paramref name="t"/> from 0 to 1, as RGB from 0 to 1.</summary>
-        private static double[] Colour(double t)
+        private static double[] Viridis(double t)
         {
-            t = Math.Max(0, Math.Min(1, t)) * (Viridis.Length - 1);
-            int i = Math.Min((int)t, Viridis.Length - 2);
+            t = Math.Max(0, Math.Min(1, t)) * (ViridisStops.Length - 1);
+            int i = Math.Min((int)t, ViridisStops.Length - 2);
             double f = t - i;
             var rgb = new double[3];
             for (int c = 0; c < 3; c++)
-                rgb[c] = (Viridis[i][c] + f * (Viridis[i + 1][c] - Viridis[i][c])) / 255.0;
+                rgb[c] = (ViridisStops[i][c] + f * (ViridisStops[i + 1][c] - ViridisStops[i][c])) / 255.0;
             return rgb;
         }
+
+        /// <summary>
+        /// Turbo at <paramref name="t"/> from 0 to 1, as RGB from 0 to 1, from Google's
+        /// polynomial fit to the full table, which is within a shade of it.
+        /// </summary>
+        private static double[] Turbo(double t)
+        {
+            t = Math.Max(0, Math.Min(1, t));
+            double r = 0.13572138 + t * (4.61539260 + t * (-42.66032258 + t * (132.13108234 + t * (-152.94239396 + t * 59.28637943))));
+            double g = 0.09140261 + t * (2.19418839 + t * (4.84296658 + t * (-14.18503333 + t * (4.27729857 + t * 2.82956604))));
+            double b = 0.10667330 + t * (12.64194608 + t * (-60.58204836 + t * (110.36276771 + t * (-89.90310912 + t * 27.34824973))));
+            return new[] { Clamp(r), Clamp(g), Clamp(b) };
+        }
+
+        private static double Clamp(double v) { return Math.Max(0, Math.Min(1, v)); }
     }
 }

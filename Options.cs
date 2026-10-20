@@ -132,6 +132,9 @@ namespace PdfQualityCompare
 
         /// <summary>Write a copy of each side with the order its text is read in drawn over it.</summary>
         public bool ReadingOrder = true;
+
+        /// <summary>Colour scale the reading-order copies number their lines along.</summary>
+        public Palette Palette = Palette.Turbo;
         public double VisualDpi = 72;
 
         /// <summary>Grey-level delta (0-255) above which two pixels count as different.</summary>
@@ -226,6 +229,8 @@ Options:
   --highlight-moves       Let that comparison also highlight moved text (counts moves as differences).
   --no-reading-order      Skip the copies of each side with every text line boxed and
                           numbered in the order it is read (reading-order\).
+  --palette <turbo|viridis>
+                          Colours for those copies (default: turbo).
   --visual                Also rasterise and measure pixel differences (slow).
   --visual-dpi <n>        DPI for the raster comparison (default: 72).
   --visual-threshold <n>  Grey delta 0-255 counted as a pixel difference (default: 32).
@@ -322,6 +327,18 @@ Examples:
                         o.Annotations = false; break;
                     case "--highlight-moves":
                         o.HighlightMoves = true; break;
+                    case "--palette":
+                    {
+                        string name = Next(args, ref i, ref error);
+                        if (name == null) break;
+                        switch (name.ToLowerInvariant())
+                        {
+                            case "turbo": o.Palette = Palette.Turbo; break;
+                            case "viridis": o.Palette = Palette.Viridis; break;
+                            default: error = "--palette must be turbo or viridis, not " + name; break;
+                        }
+                        break;
+                    }
                     case "--no-reading-order":
                         o.ReadingOrder = false; break;
                     case "--visual":

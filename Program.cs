@@ -191,7 +191,8 @@ namespace PdfQualityCompare
                     results[i] = CompareOne(pairs[i], options, diffsDir);
                     TextExport.Write(pairs[i].Name, pairs[i].ReferencePdf, pairs[i].CandidatePdf, textDir);
                     if (orderDir != null)
-                        ReadingOrderOverlay.Write(pairs[i].Name, pairs[i].ReferencePdf, pairs[i].CandidatePdf, orderDir);
+                        ReadingOrderOverlay.Write(pairs[i].Name, pairs[i].ReferencePdf, pairs[i].CandidatePdf, orderDir,
+                                                  options.Palette);
 
                     Interlocked.Add(ref busyTicks, Stopwatch.GetTimestamp() - started);
                     int n = Interlocked.Increment(ref done);
