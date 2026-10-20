@@ -244,8 +244,12 @@ With a single candidate, written to the `--out` directory:
   comparison marked up, so the highlights behind a mark count can actually be read. A
   document with no highlights gets no file, because the copy would be the candidate
   unchanged. `--no-annotations` skips the pass and the folder is not created.
+- **`text/`** — `<document>.reference.txt` and `<document>.candidate.txt`, the plain text
+  the Apryse TextExtractor reads from each PDF in reading order, with a form feed between
+  pages, so the two sides can be read or diffed with any tool. A side with no PDF, or one
+  that is password protected, gets no file.
 
-With several candidates those four move into a sub-folder per candidate, named after it,
+With several candidates those move into a sub-folder per candidate, named after it,
 and `--out` itself holds the comparison between them:
 
 - **`index.html`** — the one to open. Each candidate's aggregate figures side by side,

@@ -165,6 +165,9 @@ namespace PdfQualityCompare
                 Directory.CreateDirectory(diffsDir);
             }
 
+            string textDir = Path.Combine(options.OutputDir, "text");
+            Directory.CreateDirectory(textDir);
+
             var results = new DocResult[pairs.Count];
             int done = 0;
             // Workers inside a comparison right now, and the highest count already drawn.
@@ -183,6 +186,7 @@ namespace PdfQualityCompare
                 try
                 {
                     results[i] = CompareOne(pairs[i], options, diffsDir);
+                    TextExport.Write(pairs[i].Name, pairs[i].ReferencePdf, pairs[i].CandidatePdf, textDir);
 
                     Interlocked.Add(ref busyTicks, Stopwatch.GetTimestamp() - started);
                     int n = Interlocked.Increment(ref done);
@@ -235,6 +239,7 @@ namespace PdfQualityCompare
                 if (failed > 0)
                     Console.WriteLine("          {0} could not be written; their counts are still reported.", failed);
             }
+            Console.WriteLine("Text    : {0}", textDir);
             Console.WriteLine("Report  : {0}", html);
             Console.WriteLine("CSV     : {0}", csv);
             Console.WriteLine("Details : {0}", json);
