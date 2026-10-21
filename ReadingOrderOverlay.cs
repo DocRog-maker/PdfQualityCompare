@@ -219,6 +219,7 @@ namespace PdfQualityCompare
         /// </summary>
         private static void Jumps(PDFDoc doc, Page page, int pageNumber, List<Rect> lines)
         {
+            bool[] overlays = Overlays(lines);
             for (int i = 0; i + 1 < lines.Count; i++)
             {
                 Rect from = lines[i], to = lines[i + 1];
@@ -231,12 +232,13 @@ namespace PdfQualityCompare
                 // Going back up the page decides first; crossing other text only on the way down.
                 ColorPt colour;
                 string title;
-                if (end.y - start.y > 0.5 * Math.Min(from.Height(), to.Height()))
+                bool upwards = end.y - start.y > 0.5 * Math.Min(from.Height(), to.Height());
+                if (upwards)
                 {
                     colour = new ColorPt(0.9, 0.1, 0.1);
                     title = UpwardsTitle;
                 }
-                else if (CrossesOtherText(start, end, lines, i, i + 1))
+                else if (CrossesOtherText(start, end, lines, i, i + 1, overlays))
                 {
                     colour = new ColorPt(0.1, 0.35, 0.95);
                     title = CrossesTitle;
@@ -279,11 +281,12 @@ namespace PdfQualityCompare
         /// lines either side, and an arrow leaving the end of a line would otherwise always
         /// clip the padding of the line below.
         /// </summary>
-        private static bool CrossesOtherText(Point start, Point end, List<Rect> lines, int fromIndex, int toIndex)
+        private static bool CrossesOtherText(Point start, Point end, List<Rect> lines, int fromIndex, int toIndex,
+                                             bool[] overlays)
         {
             for (int k = 0; k < lines.Count; k++)
             {
-                if (k == fromIndex || k == toIndex) continue;
+                if (k == fromIndex || k == toIndex || overlays[k]) continue;
                 Rect r = lines[k];
                 double quarter = r.Height() / 4;
                 if (SegmentMeetsBox(start.x, start.y, end.x, end.y,
@@ -291,6 +294,37 @@ namespace PdfQualityCompare
                     return true;
             }
             return false;
+        }
+
+        /// <summary>
+        /// Which lines lie over other text rather than beside it - a trial watermark set in
+        /// large type across the top of the page. Such a line holds other lines of text
+        /// within its box, at least half of each one's height and width, and is at least
+        /// half as tall again as they are. What it holds has to be a line of text, at least
+        /// three times as wide as it is tall: a body line often holds a subscript or a
+        /// superscript that the extractor returns as a line of its own. An arrow passing over it has not passed over
+        /// text the order skipped, so it does not count as crossing other text. The height
+        /// test keeps out the lines some text layers pad into their neighbours: those reach
+        /// less than half way into the next line and are no taller than it.
+        /// </summary>
+        private static bool[] Overlays(List<Rect> lines)
+        {
+            var overlays = new bool[lines.Count];
+            for (int k = 0; k < lines.Count; k++)
+            {
+                Rect big = lines[k];
+                for (int m = 0; m < lines.Count && !overlays[k]; m++)
+                {
+                    if (m == k) continue;
+                    Rect small = lines[m];
+                    if (big.Height() < 1.5 * small.Height()) continue;
+                    if (small.Width() < 3 * small.Height()) continue;   // a scrap, such as a subscript read on its own
+                    double sharedHeight = Math.Min(big.y2, small.y2) - Math.Max(big.y1, small.y1);
+                    double sharedWidth = Math.Min(big.x2, small.x2) - Math.Max(big.x1, small.x1);
+                    overlays[k] = sharedHeight >= 0.5 * small.Height() && sharedWidth >= 0.5 * small.Width();
+                }
+            }
+            return overlays;
         }
 
         /// <summary>Whether a line segment touches a box, by clipping it to the box (Liang-Barsky).</summary>

@@ -268,11 +268,17 @@ With a single candidate, written to the `--out` directory:
   | Blue | `Crosses other text` | The arrow passes over a line other than the two it joins (and does not go up). |
   | Green | `Reading order` | Any other jump. |
 
+  Moving to the top of the next column is one of those jumps, so a clean two-column page
+  still has a red arrow there, left for a person to judge.
+
+  Text laid over other text - a trial watermark set in large type across the page - is
+  not counted as text an arrow crosses. A line counts as laid over when it holds other
+  lines of text within its box (at least half of each one's height and width) and is at
+  least half as tall again as they are.
+
   The arrows are Line annotations noted `Page 6: line 59 → 60`, all with the subject
   `Reading order jump`, so a viewer's comment panel can be filtered to all of them by
-  subject, or to one kind by author, to step through the places the order jumps. Moving
-  to the top of the next column is one of those jumps, so a clean two-column page still
-  has an arrow there, in red.
+  subject, or to one kind by author, to step through the places the order jumps.
   `--no-reading-order` skips the copies and the folder is not created.
 
 With several candidates those move into a sub-folder per candidate, named after it,
