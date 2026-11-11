@@ -174,6 +174,15 @@ namespace PdfQualityCompare
             string muOrderDir = options.MuPdfReadingOrder ? Path.Combine(options.OutputDir, "reading-order-mupdf") : null;
             if (muOrderDir != null) Directory.CreateDirectory(muOrderDir);
 
+            string fiumOrderDir = null, fiumTextDir = null;
+            if (options.PdfiumReadingOrder)
+            {
+                fiumOrderDir = Path.Combine(options.OutputDir, "reading-order-pdfium");
+                fiumTextDir = Path.Combine(options.OutputDir, "text-pdfium");
+                Directory.CreateDirectory(fiumOrderDir);
+                Directory.CreateDirectory(fiumTextDir);
+            }
+
             string jsOrderDir = null, jsTextDir = null;
             if (options.PdfJsReadingOrder)
             {
@@ -201,13 +210,22 @@ namespace PdfQualityCompare
                 try
                 {
                     results[i] = CompareOne(pairs[i], options, diffsDir);
-                    TextExport.Write(pairs[i].Name, pairs[i].ReferencePdf, pairs[i].CandidatePdf, textDir);
+                    TextExport.Write(pairs[i].Name, pairs[i].ReferencePdf, pairs[i].CandidatePdf, textDir,
+                                     options.ApryseZOrder);
                     if (orderDir != null)
                         ReadingOrderOverlay.Write(pairs[i].Name, pairs[i].ReferencePdf, pairs[i].CandidatePdf, orderDir,
-                                                  options.Palette);
+                                                  options.Palette, side => new ReadingOrderOverlay.ApryseSource(options.ApryseZOrder));
                     if (muOrderDir != null)
                         ReadingOrderOverlay.Write(pairs[i].Name, pairs[i].ReferencePdf, pairs[i].CandidatePdf, muOrderDir,
                                                   options.Palette, options.Mutool);
+                    if (fiumOrderDir != null)
+                    {
+                        string fiumName = pairs[i].Name;
+                        ReadingOrderOverlay.Write(fiumName, pairs[i].ReferencePdf, pairs[i].CandidatePdf, fiumOrderDir,
+                            options.Palette,
+                            side => new ReadingOrderOverlay.PdfiumSource(options.PdfiumTool,
+                                ReadingOrderOverlay.Target(fiumTextDir, fiumName, side, ".txt")));
+                    }
                     if (jsOrderDir != null)
                     {
                         string name = pairs[i].Name;
@@ -271,6 +289,7 @@ namespace PdfQualityCompare
             Console.WriteLine("Text    : {0}", textDir);
             if (orderDir != null) Console.WriteLine("Order   : {0}", orderDir);
             if (muOrderDir != null) Console.WriteLine("MuPDF   : {0}", muOrderDir);
+            if (fiumOrderDir != null) Console.WriteLine("PDFium  : {0} (text in {1})", fiumOrderDir, fiumTextDir);
             if (jsOrderDir != null)
             {
                 Console.WriteLine("pdf.js  : {0} (text in {1})", jsOrderDir, jsTextDir);

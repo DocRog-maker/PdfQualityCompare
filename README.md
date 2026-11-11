@@ -103,8 +103,10 @@ highlighted copy of each side.
 | `--visual-dpi <n>` | Comparison resolution; rendering happens at twice this. |
 | `--no-reading-order` | Skip the copies of both PDFs that show the order their text is read in. |
 | `--palette <turbo\|viridis\|none>` | Colours for those copies (default turbo); `none` draws only the numbers, no boxes. |
+| `--apryse-zorder` | Read `text/` and `reading-order/` with the TextExtractor's `e_extract_using_zorder` flag (WebViewer's `EXTRACT_USING_ZORDER`): text in the order it is drawn. On OCR output this follows Firefox's copy order far more closely than the default. Comparison scores are unaffected. |
 | `--mupdf-reading-order` | Also write those copies with the lines and order MuPDF reads (needs mutool). |
 | `--mutool <path>` | mutool.exe or its folder; implies `--mupdf-reading-order`. Otherwise `MUTOOL` or the PATH. |
+| `--pdfium-reading-order` | Also write those copies in PDFium's order (Chrome's and Edge's viewer), and its text. Needs `tools\pdfium-order` set up. |
 | `--pdfjs-reading-order` | Also write those copies in the order Firefox copies the text, and that text. Needs Node.js. |
 | `--no-annotations` | Skip the Apryse `HighlightTextDiff` pass (it costs about 5s per 100 documents). |
 | `--highlight-moves` | Let that pass mark moved text too, which counts moves as differences. |
@@ -268,8 +270,19 @@ With a single candidate, written to the `--out` directory:
   | Colour | Title | When |
   | --- | --- | --- |
   | Red | `Next text is above current` | The next line is higher up the page. |
-  | Blue | `Crosses other text` | The arrow passes over a line other than the two it joins (and does not go up). |
-  | Green | `Reading order` | Any other jump. |
+  | Blue | `Crosses other text` | The arrow passes over text other than the line it points to and the line it leaves (and does not go up), or runs back along its own line over text already read - a margin number's closing bracket read after the rest of its line, say. |
+  | Orange | `Crosses its own line` | The arrow passes over the line it leaves and nothing else, goes to a lower line, and drops no more than 1.5 line heights - the usual run from the end of one line to the start of the next, so normal, but marked. That line is the piece the arrow starts from plus any pieces of the same line read just before it. |
+  | Grey | `Leads to last text on page` | The arrow goes to the last text on the page (a watermark stamped after it does not count), and that text is set apart: its middle lies outside the box round all the other text - below, above or to one side - or in the bottom tenth of the page. That is a footer or page number, so normal, whichever way the arrow runs. A stray word read last from the middle of the body is judged like any other jump. |
+  | Green | `Reading order` | Any other jump: the arrow passes over no text, or only over its own line with a drop of more than 1.5 line heights. |
+
+  No arrow is drawn, either, where the next text is further down the same column past a
+  blank line or two - the next paragraph, or a heading - and the arrow would pass over no
+  other text: the text it goes to overlaps the line it leaves across the page, and its
+  middle is no more than 3 line heights lower. A line height here is the taller of the two
+  lines, or the page's usual line spacing if that is more: engines that box text tightly
+  round the glyphs would otherwise make the reach too short.
+
+  Purple arrows (below) come first, then grey, then the order of the table.
 
   Moving to the top of the next column is one of those jumps, so a clean two-column page
   still has a red arrow there, left for a person to judge.
@@ -291,6 +304,20 @@ With a single candidate, written to the `--out` directory:
   boxes are mapped from MuPDF's page space back into PDF space, allowing for crop box,
   `/Rotate` and `UserUnit`. A line in MuPDF's output is often shorter than a TextExtractor
   line, so expect more boxes, and more arrows, for the same page.
+- **`reading-order-pdfium/`** and **`text-pdfium/`** — only with `--pdfium-reading-order`.
+  The order PDFium reads the text in: the engine behind the PDF viewers in Chrome and
+  Edge. `text-pdfium/` is PDFium's text for each page (form feed between pages), and
+  `reading-order-pdfium/` draws its order with the same numbers and arrows as the other
+  copies. PDFium splits each page's characters, in its order, into runs that each sit on
+  one line, with their boxes in PDF space; runs that carry straight on along the same line
+  are joined into one piece, so only text read out of place gets an arrow. The boxes are
+  PDFium's own.
+
+  PDFium is run through pypdfium2 (`tools/pdfium-order/extract.py`) in a virtual
+  environment of its own, so nothing in the system Python is touched. Setup, once, in
+  `tools\pdfium-order`: `python -m venv .venv`, then
+  `.venv\Scripts\python -m pip install -r requirements.txt` (pypdfium2 is pinned there).
+  `--pdfium-tool <dir>` points at the folder if it is not found above the exe.
 - **`reading-order-pdfjs/`** and **`text-pdfjs/`** — only with `--pdfjs-reading-order`. The
   order a person gets by selecting the text in Firefox and copying it, which is often not
   the order the Apryse TextExtractor reads. `text-pdfjs/` holds exactly that clipboard

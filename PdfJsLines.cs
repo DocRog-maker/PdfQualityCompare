@@ -430,7 +430,7 @@ namespace PdfQualityCompare
             return pieces;
         }
 
-        private static bool SameLineNext(Rect word, Rect next)
+        internal static bool SameLineNext(Rect word, Rect next)
         {
             double h = Math.Min(word.Height(), next.Height());
             double sharedHeight = Math.Min(word.y2, next.y2) - Math.Max(word.y1, next.y1);

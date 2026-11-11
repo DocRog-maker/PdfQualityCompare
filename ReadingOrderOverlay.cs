@@ -109,10 +109,13 @@ namespace PdfQualityCompare
         /// <summary>The Apryse TextExtractor's lines, in its order.</summary>
         internal sealed class ApryseSource : LineSource
         {
-            public override string Label { get { return ""; } }
+            private readonly bool zOrder;
+            /// <param name="zOrder">Read in z-order (e_extract_using_zorder), as --apryse-zorder asks.</param>
+            public ApryseSource(bool zOrder = false) { this.zOrder = zOrder; }
+            public override string Label { get { return zOrder ? " (z-order)" : ""; } }
             public override List<Rect> Lines(Page page, int pageNumber, TextExtractor te)
             {
-                return ReadingOrderOverlay.Lines(te, page);
+                return ReadingOrderOverlay.Lines(te, page, zOrder);
             }
         }
 
@@ -128,6 +131,29 @@ namespace PdfQualityCompare
             {
                 List<double[]> found;
                 return pages.TryGetValue(pageNumber, out found) ? MuPdfLines.ToUserSpace(page, found) : new List<Rect>();
+            }
+        }
+
+        /// <summary>
+        /// PDFium's order and boxes - Chrome's and Edge's viewer. Also writes the page text
+        /// PDFium gives to the text target when one is given.
+        /// </summary>
+        internal sealed class PdfiumSource : LineSource
+        {
+            private readonly string tool, textTarget;
+            private Dictionary<int, PdfiumLines.PageText> pages;
+            public PdfiumSource(string tool, string textTarget) { this.tool = tool; this.textTarget = textTarget; }
+            public override string Label { get { return " (PDFium)"; } }
+            public override void Open(string pdf, PDFDoc doc)
+            {
+                pages = PdfiumLines.Read(tool, pdf);
+                if (textTarget != null)
+                    File.WriteAllText(textTarget, PdfiumLines.Text(pages, doc.GetPageCount()), new UTF8Encoding(false));
+            }
+            public override List<Rect> Lines(Page page, int pageNumber, TextExtractor te)
+            {
+                PdfiumLines.PageText text;
+                return pages.TryGetValue(pageNumber, out text) ? PdfiumLines.Lines(text) : new List<Rect>();
             }
         }
 
@@ -203,7 +229,15 @@ namespace PdfQualityCompare
                     }
                 }
 
-                doc.Save(target, pdftron.SDF.SDFDoc.SaveOptions.e_remove_unused);
+                // Saved beside the target and then moved over it, so a copy that cannot be
+                // replaced - open in a viewer, say - fails loudly here rather than leaving
+                // the previous run's file in place looking current.
+                string temp = target + ".tmp";
+                doc.Save(temp, pdftron.SDF.SDFDoc.SaveOptions.e_remove_unused);
+                // The document keeps the file it was saved to open until it is closed.
+                doc.Dispose();
+                doc = null;
+                Replace(temp, target);
             }
             catch (Exception ex)
             {
@@ -219,10 +253,10 @@ namespace PdfQualityCompare
         }
 
         /// <summary>The page's text lines in reading order, read the way the text export reads them.</summary>
-        private static List<Rect> Lines(TextExtractor te, Page page)
+        private static List<Rect> Lines(TextExtractor te, Page page, bool zOrder = false)
         {
             var lines = new List<Rect>();
-            te.Begin(page);
+            TextExport.Begin(te, page, zOrder);
             for (TextExtractor.Line line = te.GetFirstLine(); line.IsValid(); line = line.GetNextLine())
             {
                 Rect bb = line.GetBBox();
@@ -343,6 +377,14 @@ namespace PdfQualityCompare
         private static void Jumps(PDFDoc doc, Page page, int pageNumber, List<Rect> lines, bool[] watermarks)
         {
             bool[] overlays = Overlays(lines);
+            double pitch = LinePitch(lines);
+
+            // The last text on the page, not counting a watermark stamped after it - and only
+            // when it is set apart from the rest, as a footer or page number is.
+            int last = lines.Count - 1;
+            while (last > 0 && IsWatermark(watermarks, last)) last--;
+            if (!SetApart(page, lines, last, watermarks, overlays)) last = -1;
+
             for (int i = 0; i + 1 < lines.Count; i++)
             {
                 Rect from = lines[i], to = lines[i + 1];
@@ -355,24 +397,46 @@ namespace PdfQualityCompare
                 // Going back up the page decides first; crossing other text only on the way down.
                 ColorPt colour;
                 string title;
-                bool upwards = end.y - start.y > 0.5 * Math.Min(from.Height(), to.Height());
+                Crosses crossing;
+                double lineHeight = Math.Min(from.Height(), to.Height());
+                bool upwards = end.y - start.y > 0.5 * lineHeight;
                 if (IsWatermark(watermarks, i) || IsWatermark(watermarks, i + 1))
                 {
                     colour = new ColorPt(WatermarkColour[0], WatermarkColour[1], WatermarkColour[2]);
                     title = WatermarkTitle;
+                }
+                else if (i + 1 == last)
+                {
+                    colour = new ColorPt(LastTextColour[0], LastTextColour[1], LastTextColour[2]);
+                    title = LastTextTitle;
                 }
                 else if (upwards)
                 {
                     colour = new ColorPt(0.9, 0.1, 0.1);
                     title = UpwardsTitle;
                 }
-                else if (CrossesOtherText(start, end, lines, i, i + 1, overlays))
+                else if ((crossing = Crossing(start, end, lines, i, i + 1, overlays)) == Crosses.OtherText
+                         // Back along the line it is on, over text already read: not a line
+                         // wrap but text read out of place, such as a closing bracket of a
+                         // margin number read after the rest of its line. Judged by the arrow
+                         // staying level rather than by the boxes overlapping: OCR word boxes
+                         // are often tall enough that the lines above and below overlap too.
+                         || (crossing == Crosses.OwnLine && Math.Abs(start.y - end.y) < 0.25 * lineHeight))
                 {
                     colour = new ColorPt(0.1, 0.35, 0.95);
                     title = CrossesTitle;
                 }
+                else if (crossing == Crosses.OwnLine && Math.Abs(start.y - end.y) <= 1.5 * lineHeight)
+                {
+                    colour = new ColorPt(OwnLineColour[0], OwnLineColour[1], OwnLineColour[2]);
+                    title = OwnLineTitle;
+                }
                 else
                 {
+                    // Down past a blank line or two to text in the same column - the next
+                    // paragraph or a heading - over no other text: nothing unexpected.
+                    if (AcrossGap(from, to, start, end, Math.Max(Math.Max(from.Height(), to.Height()), pitch)))
+                        continue;
                     colour = new ColorPt(0.1, 0.65, 0.2);
                     title = JumpAuthor;
                 }
@@ -419,7 +483,10 @@ namespace PdfQualityCompare
             return watermarks != null && i < watermarks.Length && watermarks[i];
         }
 
-        /// <summary>Title of a blue arrow, one that passes over text other than the two lines it joins.</summary>
+        /// <summary>
+        /// Title of a blue arrow, one that passes over text other than the line it points to
+        /// and the line it leaves.
+        /// </summary>
         private const string CrossesTitle = "Crosses other text";
 
         /// <summary>Title of a red arrow, one pointing back up the page.</summary>
@@ -432,19 +499,93 @@ namespace PdfQualityCompare
         /// lines either side, and an arrow leaving the end of a line would otherwise always
         /// clip the padding of the line below.
         /// </summary>
-        private static bool CrossesOtherText(Point start, Point end, List<Rect> lines, int fromIndex, int toIndex,
-                                             bool[] overlays)
+        private enum Crosses { Nothing, OwnLine, OtherText }
+
+        /// <summary>
+        /// Title of an orange arrow: one that passes over no text but the line it leaves -
+        /// the piece it starts from, and pieces of that same line read just before it. That
+        /// is how an arrow from the end of a line to the start of the next one usually runs,
+        /// when the extractor has broken the line into pieces, so it is normal rather than a
+        /// fault, but still marked. Only while it goes to a lower line and drops no more than
+        /// one and a half line heights: further than that it has skipped a gap, and is drawn
+        /// green; back along the same line it is text read out of place, and is drawn blue.
+        /// </summary>
+        private const string OwnLineTitle = "Crosses its own line";
+
+        /// <summary>
+        /// Title of a grey arrow, one to the last text on the page (leaving out a watermark
+        /// stamped after it) when that text is set apart from the rest - see
+        /// <see cref="SetApart"/>. That is a footer or page number, read last wherever it
+        /// sits, so it is normal however it runs - up the page or over other text.
+        /// </summary>
+        private const string LastTextTitle = "Leads to last text on page";
+
+        private static readonly double[] LastTextColour = { 0.5, 0.5, 0.5 };
+
+        /// <summary>Share of the page height, from the bottom, that counts as its foot.</summary>
+        private const double PageFoot = 0.1;
+
+        /// <summary>
+        /// Whether line <paramref name="index"/> sits apart from the rest of the page's text,
+        /// as a footer or page number does: its middle outside the box round all the other
+        /// text (below, above or to one side of it), or in the bottom tenth of the page. The
+        /// box leaves out watermarks and text laid over other text. A stray word the
+        /// extractor reads last from the middle of the body is not set apart.
+        /// </summary>
+        private static bool SetApart(Page page, List<Rect> lines, int index, bool[] watermarks, bool[] overlays)
         {
+            if (index < 0 || index >= lines.Count) return false;
+            Rect r = lines[index];
+            double cx = (r.x1 + r.x2) / 2, cy = (r.y1 + r.y2) / 2;
+
+            Rect crop = page.GetCropBox();
+            crop.Normalize();
+            if (cy <= crop.y1 + PageFoot * crop.Height()) return true;
+
+            double x1 = double.MaxValue, y1 = double.MaxValue, x2 = double.MinValue, y2 = double.MinValue;
             for (int k = 0; k < lines.Count; k++)
             {
-                if (k == fromIndex || k == toIndex || overlays[k]) continue;
+                if (k == index || overlays[k] || IsWatermark(watermarks, k)) continue;
+                Rect o = lines[k];
+                x1 = Math.Min(x1, o.x1); y1 = Math.Min(y1, o.y1);
+                x2 = Math.Max(x2, o.x2); y2 = Math.Max(y2, o.y2);
+            }
+            if (x1 > x2) return true;      // nothing else on the page
+            return cy < y1 || cy > y2 || cx < x1 || cx > x2;
+        }
+
+        private static readonly double[] OwnLineColour = { 1.0, 0.55, 0.0 };
+
+        /// <summary>
+        /// What text the arrow from <paramref name="start"/> to <paramref name="end"/>
+        /// passes over, leaving out the line it points to and text laid over other text.
+        /// Text on the line the arrow leaves - that piece, or an earlier-read piece sitting
+        /// on the same line - counts as its own line; anything else is other text.
+        /// </summary>
+        private static Crosses Crossing(Point start, Point end, List<Rect> lines, int fromIndex, int toIndex,
+                                        bool[] overlays)
+        {
+            bool ownLine = false;
+            Rect from = lines[fromIndex];
+            for (int k = 0; k < lines.Count; k++)
+            {
+                if (k == toIndex || overlays[k]) continue;
                 Rect r = lines[k];
                 double quarter = r.Height() / 4;
-                if (SegmentMeetsBox(start.x, start.y, end.x, end.y,
-                                    r.x1 + 1, r.y1 + quarter, r.x2 - 1, r.y2 - quarter))
-                    return true;
+                if (!SegmentMeetsBox(start.x, start.y, end.x, end.y,
+                                     r.x1 + 1, r.y1 + quarter, r.x2 - 1, r.y2 - quarter))
+                    continue;
+                if (k == fromIndex || (k < fromIndex && SameLine(r, from))) ownLine = true;
+                else return Crosses.OtherText;
             }
-            return false;
+            return ownLine ? Crosses.OwnLine : Crosses.Nothing;
+        }
+
+        /// <summary>Whether two boxes sit on one line: sharing at least half the height of the shorter.</summary>
+        private static bool SameLine(Rect a, Rect b)
+        {
+            double h = Math.Min(a.Height(), b.Height());
+            return Math.Min(a.y2, b.y2) - Math.Max(a.y1, b.y1) >= 0.5 * h;
         }
 
         /// <summary>
@@ -523,6 +664,78 @@ namespace PdfQualityCompare
             double sharedWidth = Math.Min(line.x2, next.x2) - Math.Max(line.x1, next.x1);
             double drop = line.y1 - next.y2;   // space between the bottom of one and the top of the next
             return sharedWidth > 0 && next.y2 < line.y2 && drop <= 1.5 * h;
+        }
+
+        /// <summary>
+        /// Moves <paramref name="temp"/> over <paramref name="target"/>, trying again for a
+        /// couple of seconds while something else has either open: a virus scanner looking
+        /// at the file just written, typically. Still failing after that, it throws, and the
+        /// caller reports it.
+        /// </summary>
+        private static void Replace(string temp, string target)
+        {
+            for (int attempt = 1; ; attempt++)
+            {
+                try
+                {
+                    if (File.Exists(target)) File.Delete(target);
+                    File.Move(temp, target);
+                    return;
+                }
+                catch (IOException) when (attempt < 10)
+                {
+                    System.Threading.Thread.Sleep(250);
+                }
+                catch (UnauthorizedAccessException) when (attempt < 10)
+                {
+                    System.Threading.Thread.Sleep(250);
+                }
+            }
+        }
+
+        /// <summary>
+        /// The page's usual line spacing: the median step, centre to centre, from a line to
+        /// the next one read when that one is lower down, overlapping it across the page and
+        /// within two of its heights - ordinary line wraps. Zero when the page has none. Some
+        /// engines box text tightly round the glyphs and some pad it, so a gap measured in
+        /// box heights alone means different things from one to the next; the spacing does not.
+        /// </summary>
+        private static double LinePitch(List<Rect> lines)
+        {
+            var steps = new List<double>();
+            for (int i = 0; i + 1 < lines.Count; i++)
+            {
+                Rect a = lines[i], b = lines[i + 1];
+                double drop = (a.y1 + a.y2) / 2 - (b.y1 + b.y2) / 2;
+                double h = Math.Max(a.Height(), b.Height());
+                double sharedWidth = Math.Min(a.x2, b.x2) - Math.Max(a.x1, b.x1);
+                if (drop > 0.5 * h && drop <= 2 * h && sharedWidth > 0) steps.Add(drop);
+            }
+            if (steps.Count == 0) return 0;
+            steps.Sort();
+            return steps[steps.Count / 2];
+        }
+
+        /// <summary>
+        /// Furthest, in line heights between centres, that <see cref="AcrossGap"/> reaches
+        /// down the page; the height is the taller of the two lines, so a short last line of
+        /// a paragraph (a few figures, say) does not shrink the reach.
+        /// </summary>
+        private const double GapLines = 3;
+
+        /// <summary>
+        /// Whether <paramref name="next"/> is simply further down the same column: below
+        /// <paramref name="line"/>, overlapping it across the page, with its middle no more
+        /// than <see cref="GapLines"/> line heights lower - the next paragraph, or a heading
+        /// after the blank space above it. Only asked of an arrow that passes over no text but
+        /// its own line, so text skipped on the way still shows.
+        /// </summary>
+        private static bool AcrossGap(Rect line, Rect next, Point start, Point end, double lineHeight)
+        {
+            double drop = start.y - end.y;
+            if (drop <= 0 || drop > GapLines * lineHeight) return false;
+            double sharedWidth = Math.Min(line.x2, next.x2) - Math.Max(line.x1, next.x1);
+            return sharedWidth > 0;
         }
 
         /// <summary>Viridis at <paramref name="t"/> from 0 to 1, as RGB from 0 to 1.</summary>

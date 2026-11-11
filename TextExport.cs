@@ -18,10 +18,22 @@ namespace PdfQualityCompare
         /// Never throws: the export is a by-product, and a document whose text will not
         /// write out should still be compared.
         /// </summary>
-        public static void Write(string name, string referencePdf, string candidatePdf, string directory)
+        public static void Write(string name, string referencePdf, string candidatePdf, string directory,
+                                 bool zOrder = false)
         {
-            if (referencePdf != null) WriteOne(referencePdf, Target(directory, name, "reference"));
-            if (candidatePdf != null) WriteOne(candidatePdf, Target(directory, name, "candidate"));
+            if (referencePdf != null) WriteOne(referencePdf, Target(directory, name, "reference"), zOrder);
+            if (candidatePdf != null) WriteOne(candidatePdf, Target(directory, name, "candidate"), zOrder);
+        }
+
+        /// <summary>
+        /// Starts <paramref name="te"/> on a page with the default flags, or, with
+        /// <paramref name="zOrder"/>, with e_extract_using_zorder: the text in the order it
+        /// is drawn rather than the order the TextExtractor's layout analysis works out.
+        /// </summary>
+        public static void Begin(TextExtractor te, Page page, bool zOrder)
+        {
+            if (zOrder) te.Begin(page, null, TextExtractor.ProcessingFlags.e_extract_using_zorder);
+            else te.Begin(page);
         }
 
         private static string Target(string directory, string name, string side)
@@ -35,7 +47,7 @@ namespace PdfQualityCompare
         /// The whole document's text, page by page in reading order, with a form feed
         /// between pages so a page number can still be found from the text alone.
         /// </summary>
-        private static void WriteOne(string pdf, string target)
+        private static void WriteOne(string pdf, string target, bool zOrder)
         {
             PDFDoc doc = null;
             TextExtractor te = null;
@@ -54,7 +66,7 @@ namespace PdfQualityCompare
                     Page page = doc.GetPage(pageNum);
                     if (page == null || !page.IsValid()) continue;
 
-                    te.Begin(page);
+                    Begin(te, page, zOrder);
                     sb.Append(te.GetAsText());
                 }
                 File.WriteAllText(target, sb.ToString(), new UTF8Encoding(false));

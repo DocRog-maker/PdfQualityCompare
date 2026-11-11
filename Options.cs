@@ -133,6 +133,12 @@ namespace PdfQualityCompare
         /// <summary>Write a copy of each side with the order its text is read in drawn over it.</summary>
         public bool ReadingOrder = true;
 
+        /// <summary>
+        /// Read the text export and the Apryse reading-order copies with
+        /// e_extract_using_zorder. The comparison itself is not affected.
+        /// </summary>
+        public bool ApryseZOrder;
+
         /// <summary>Colour scale the reading-order copies number their lines along.</summary>
         public Palette Palette = Palette.Turbo;
 
@@ -150,6 +156,15 @@ namespace PdfQualityCompare
         /// order, drawn with Apryse's word boxes, plus the text itself.
         /// </summary>
         public bool PdfJsReadingOrder;
+
+        /// <summary>
+        /// Also write reading-order copies in PDFium's order (Chrome's and Edge's viewer),
+        /// plus PDFium's text.
+        /// </summary>
+        public bool PdfiumReadingOrder;
+
+        /// <summary>The tools\pdfium-order folder, from --pdfium-tool; found above the exe if not given.</summary>
+        public string PdfiumTool;
 
         /// <summary>node.exe or its folder, from --node; resolved to the file once parsed.</summary>
         public string Node;
@@ -253,6 +268,9 @@ Options:
   --palette <turbo|viridis|none>
                           Colours for those copies (default: turbo). none draws no
                           boxes, only each piece's number on a plain dark tab.
+  --apryse-zorder         Read text\ and reading-order\ with the TextExtractor's
+                          e_extract_using_zorder flag: the order text is drawn in. The
+                          comparison scores are not affected.
   --mupdf-reading-order   Also write those copies with the lines and their order as MuPDF
                           reads them (reading-order-mupdf\). Runs mutool, found from
                           --mutool, the MUTOOL environment variable or the PATH.
@@ -261,6 +279,10 @@ Options:
                           (reading-order-pdfjs\), and that text (text-pdfjs\). Runs pdf.js
                           under Node; positions come from Apryse's words.
   --node <path>           node.exe, or its folder (default: the PATH).
+  --pdfium-reading-order  Also write those copies in PDFium's order - the engine in
+                          Chrome's and Edge's viewers (reading-order-pdfium\) - and its
+                          text (text-pdfium\). Runs tools\pdfium-order under its own Python.
+  --pdfium-tool <dir>     The tools\pdfium-order folder (default: found above the exe).
   --pdfjs-tool <dir>      The tools\pdfjs-order folder (default: found above the exe).
   --visual                Also rasterise and measure pixel differences (slow).
   --visual-dpi <n>        DPI for the raster comparison (default: 72).
@@ -373,6 +395,12 @@ Examples:
                     }
                     case "--no-reading-order":
                         o.ReadingOrder = false; break;
+                    case "--apryse-zorder":
+                        o.ApryseZOrder = true; break;
+                    case "--pdfium-reading-order":
+                        o.PdfiumReadingOrder = true; break;
+                    case "--pdfium-tool":
+                        o.PdfiumTool = Next(args, ref i, ref error); break;
                     case "--pdfjs-reading-order":
                         o.PdfJsReadingOrder = true; break;
                     case "--node":
@@ -472,6 +500,25 @@ Examples:
                 }
                 o.Node = node;
                 o.PdfJsTool = tool;
+            }
+
+            if (o.PdfiumReadingOrder)
+            {
+                string tool = PdfiumLines.LocateTool(o.PdfiumTool);
+                if (tool == null)
+                {
+                    error = o.PdfiumTool != null
+                        ? "--pdfium-tool: no extract.py in " + o.PdfiumTool
+                        : "--pdfium-reading-order cannot find tools\\pdfium-order; pass --pdfium-tool <dir>.";
+                    return null;
+                }
+                if (PdfiumLines.Python(tool) == null)
+                {
+                    error = "PDFium is not set up in " + tool + ": run python -m venv .venv there, then " +
+                            ".venv\\Scripts\\python -m pip install -r requirements.txt.";
+                    return null;
+                }
+                o.PdfiumTool = tool;
             }
 
             o.ReferenceRoot = Path.GetFullPath(o.ReferenceRoot);
