@@ -3,3 +3,4 @@ obj/
 .vs/
 testfiles/042/042665.doc
 *042665.doc
+node_modules/

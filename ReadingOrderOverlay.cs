@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using System.Text;
 using pdftron.PDF;
 
 namespace PdfQualityCompare
@@ -22,7 +23,8 @@ namespace PdfQualityCompare
     /// The marks are drawn into the page content rather than as annotations: a page can
     /// have hundreds of lines, and the copy is for looking at, not editing.
     /// </summary>
-    internal enum Palette { Turbo, Viridis }
+    /// <remarks>None draws no boxes, only the numbers, all on one dark grey tab.</remarks>
+    internal enum Palette { Turbo, Viridis, None }
 
     internal static class ReadingOrderOverlay
     {
@@ -35,6 +37,9 @@ namespace PdfQualityCompare
         private const double LabelSize = 6;
         private const double BoxWidth = 0.75;
         private const double FillOpacity = 0.12;
+
+        /// <summary>The one tab colour with <see cref="Palette.None"/>: dark grey, so white numbers read on it.</summary>
+        private static readonly double[] NoneColour = { 0.2, 0.2, 0.2 };
 
         /// <summary>
         /// Viridis at nine evenly spaced points, from matplotlib's definition; the colours
@@ -55,24 +60,127 @@ namespace PdfQualityCompare
         public static void Write(string name, string referencePdf, string candidatePdf, string directory,
                                  Palette palette)
         {
-            if (referencePdf != null) WriteOne(referencePdf, Target(directory, name, "reference"), palette);
-            if (candidatePdf != null) WriteOne(candidatePdf, Target(directory, name, "candidate"), palette);
+            Write(name, referencePdf, candidatePdf, directory, palette, side => new ApryseSource());
         }
 
-        private static string Target(string directory, string name, string side)
+        /// <summary>
+        /// As <see cref="Write(string,string,string,string,Palette)"/>, but with the lines and
+        /// their order taken from MuPDF, by running <paramref name="mutool"/>, rather than from
+        /// the Apryse TextExtractor. Null <paramref name="mutool"/> means the TextExtractor.
+        /// </summary>
+        public static void Write(string name, string referencePdf, string candidatePdf, string directory,
+                                 Palette palette, string mutool)
+        {
+            Write(name, referencePdf, candidatePdf, directory, palette,
+                  side => mutool != null ? (LineSource)new MuPdfSource(mutool) : new ApryseSource());
+        }
+
+        /// <summary>
+        /// As above, with the lines and their order from whatever <paramref name="source"/>
+        /// makes for a side ("reference" or "candidate").
+        /// </summary>
+        public static void Write(string name, string referencePdf, string candidatePdf, string directory,
+                                 Palette palette, Func<string, LineSource> source)
+        {
+            if (referencePdf != null)
+                WriteOne(referencePdf, Target(directory, name, "reference"), palette, source("reference"));
+            if (candidatePdf != null)
+                WriteOne(candidatePdf, Target(directory, name, "candidate"), palette, source("candidate"));
+        }
+
+        /// <summary>
+        /// Where a page's lines and their order come from. <see cref="Open"/> is called once
+        /// with the original file, before anything is drawn on the copy, and
+        /// <see cref="Lines"/> then once a page, also before that page is drawn on.
+        /// </summary>
+        internal abstract class LineSource
+        {
+            public abstract string Label { get; }
+            public virtual void Open(string pdf, PDFDoc doc) { }
+            public abstract List<Rect> Lines(Page page, int pageNumber, TextExtractor te);
+
+            /// <summary>
+            /// For the lines <see cref="Lines"/> last returned, which hold watermark text;
+            /// null when this source does not look for it.
+            /// </summary>
+            public virtual bool[] Watermarks { get { return null; } }
+        }
+
+        /// <summary>The Apryse TextExtractor's lines, in its order.</summary>
+        internal sealed class ApryseSource : LineSource
+        {
+            public override string Label { get { return ""; } }
+            public override List<Rect> Lines(Page page, int pageNumber, TextExtractor te)
+            {
+                return ReadingOrderOverlay.Lines(te, page);
+            }
+        }
+
+        /// <summary>MuPDF's lines, in its order, with its own boxes.</summary>
+        internal sealed class MuPdfSource : LineSource
+        {
+            private readonly string mutool;
+            private Dictionary<int, List<double[]>> pages;
+            public MuPdfSource(string mutool) { this.mutool = mutool; }
+            public override string Label { get { return " (MuPDF)"; } }
+            public override void Open(string pdf, PDFDoc doc) { pages = MuPdfLines.Read(mutool, pdf); }
+            public override List<Rect> Lines(Page page, int pageNumber, TextExtractor te)
+            {
+                List<double[]> found;
+                return pages.TryGetValue(pageNumber, out found) ? MuPdfLines.ToUserSpace(page, found) : new List<Rect>();
+            }
+        }
+
+        /// <summary>
+        /// Firefox's order, from pdf.js, drawn with Apryse's word boxes. Also writes the text
+        /// Firefox would copy to the text target when one is given.
+        /// </summary>
+        internal sealed class PdfJsSource : LineSource
+        {
+            private readonly string node, tool, textTarget;
+            private readonly List<string[]> watermarkPhrases;
+            private readonly Options options;
+            private Dictionary<int, PdfJsLines.PageText> pages;
+            private bool[] watermarks;
+            public PdfJsSource(string node, string tool, string textTarget, Options options)
+            {
+                this.node = node; this.tool = tool; this.textTarget = textTarget;
+                this.options = options;
+                watermarkPhrases = WatermarkPhrases(options);
+            }
+            public override bool[] Watermarks { get { return watermarks; } }
+            public override string Label { get { return " (pdf.js)"; } }
+            public override void Open(string pdf, PDFDoc doc)
+            {
+                pages = PdfJsLines.Read(node, tool, pdf);
+                if (textTarget != null)
+                    File.WriteAllText(textTarget, PdfJsLines.Text(pages, doc.GetPageCount()), new UTF8Encoding(false));
+            }
+            public override List<Rect> Lines(Page page, int pageNumber, TextExtractor te)
+            {
+                PdfJsLines.PageText text;
+                watermarks = null;
+                if (!pages.TryGetValue(pageNumber, out text)) return new List<Rect>();
+                return PdfJsLines.Lines(page, text, te, watermarkPhrases, options, out watermarks);
+            }
+        }
+
+        public static string Target(string directory, string name, string side, string extension = ".pdf")
         {
             foreach (char c in Path.GetInvalidFileNameChars()) name = name.Replace(c, '_');
             if (name.Length > 120) name = name.Substring(0, 120);
-            return Path.Combine(directory, name + "." + side + ".pdf");
+            return Path.Combine(directory, name + "." + side + extension);
         }
 
-        private static void WriteOne(string pdf, string target, Palette palette)
+        private static void WriteOne(string pdf, string target, Palette palette, LineSource source)
         {
             PDFDoc doc = null;
             try
             {
                 doc = new PDFDoc(pdf);
                 if (!doc.InitSecurityHandler()) return;
+                // Another engine reads the original file, before anything is drawn on the copy.
+                source.Open(pdf, doc);
 
                 Font font = Font.Create(doc, Font.StandardType1Font.e_helvetica_bold);
                 using (var te = new TextExtractor())
@@ -87,10 +195,11 @@ namespace PdfQualityCompare
 
                         // Read before anything is drawn, so the overlay's own numbers are
                         // not read back as text.
-                        List<Rect> lines = Lines(te, page);
+                        List<Rect> lines = source.Lines(page, p, te);
                         if (lines.Count == 0) continue;
-                        Draw(page, lines, font, builder, writer, palette);
-                        Jumps(doc, page, p, lines);
+                        bool[] watermarks = source.Watermarks;
+                        Draw(page, lines, watermarks, font, builder, writer, palette);
+                        Jumps(doc, page, p, lines, watermarks);
                     }
                 }
 
@@ -100,7 +209,8 @@ namespace PdfQualityCompare
             {
                 // On its own line: the progress line is redrawn in place on stdout.
                 Console.Error.WriteLine();
-                Console.Error.WriteLine("Reading order overlay failed for {0}: {1}", pdf, ex.Message);
+                Console.Error.WriteLine("Reading order overlay{0} failed for {1}: {2}",
+                                        source.Label, pdf, ex.Message);
             }
             finally
             {
@@ -122,10 +232,13 @@ namespace PdfQualityCompare
             return lines;
         }
 
-        private static void Draw(Page page, List<Rect> lines, Font font, ElementBuilder builder, ElementWriter writer,
-                                 Palette palette)
+        private static void Draw(Page page, List<Rect> lines, bool[] watermarks, Font font, ElementBuilder builder,
+                                 ElementWriter writer, Palette palette)
         {
-            writer.Begin(page, ElementWriter.WriteMode.e_overlay);
+            // In default user space, as the line boxes are. The page coordinate system Begin
+            // otherwise draws in is the rotated one, which puts every box in the wrong place
+            // on a page with /Rotate.
+            writer.Begin(page, ElementWriter.WriteMode.e_overlay, false);
             builder.Reset();
             Rect crop = page.GetCropBox();
             crop.Normalize();
@@ -135,8 +248,18 @@ namespace PdfQualityCompare
             {
                 Rect box = lines[i];
                 double t = per == 1 ? 0 : (double)(i % per) / (per - 1);
-                double[] rgb = palette == Palette.Viridis ? Viridis(t) : Turbo(t);
+                bool isWatermark = watermarks != null && i < watermarks.Length && watermarks[i];
+                double[] rgb = isWatermark ? WatermarkColour
+                             : palette == Palette.None ? NoneColour
+                             : palette == Palette.Viridis ? Viridis(t) : Turbo(t);
                 var colour = new ColorPt(rgb[0], rgb[1], rgb[2]);
+
+                // With no palette only the number marks where each piece starts.
+                if (palette == Palette.None)
+                {
+                    Label(i + 1, box, crop, colour, rgb, font, builder, writer);
+                    continue;
+                }
 
                 // The line's box, outlined and faintly filled so the text stays readable.
                 Element rect = builder.CreateRect(box.x1, box.y1, box.Width(), box.Height());
@@ -217,7 +340,7 @@ namespace PdfQualityCompare
         /// annotations, unlike the boxes, so they can be listed, filtered to and stepped
         /// through in a viewer's comment panel.
         /// </summary>
-        private static void Jumps(PDFDoc doc, Page page, int pageNumber, List<Rect> lines)
+        private static void Jumps(PDFDoc doc, Page page, int pageNumber, List<Rect> lines, bool[] watermarks)
         {
             bool[] overlays = Overlays(lines);
             for (int i = 0; i + 1 < lines.Count; i++)
@@ -233,7 +356,12 @@ namespace PdfQualityCompare
                 ColorPt colour;
                 string title;
                 bool upwards = end.y - start.y > 0.5 * Math.Min(from.Height(), to.Height());
-                if (upwards)
+                if (IsWatermark(watermarks, i) || IsWatermark(watermarks, i + 1))
+                {
+                    colour = new ColorPt(WatermarkColour[0], WatermarkColour[1], WatermarkColour[2]);
+                    title = WatermarkTitle;
+                }
+                else if (upwards)
                 {
                     colour = new ColorPt(0.9, 0.1, 0.1);
                     title = UpwardsTitle;
@@ -266,6 +394,29 @@ namespace PdfQualityCompare
                 arrow.RefreshAppearance();
                 page.AnnotPushBack(arrow);
             }
+        }
+
+        /// <summary>
+        /// Title of a purple arrow, one into or out of a piece of watermark text. The jump is
+        /// an artefact of the watermark, not of the reading order, so they can all be
+        /// filtered to by this title (shown as the author) and deleted together.
+        /// </summary>
+        public const string WatermarkTitle = "Watermark artifact";
+
+        /// <summary>Purple: apart from the red, blue and green of the real jumps.</summary>
+        private static readonly double[] WatermarkColour = { 0.6, 0.15, 0.75 };
+
+        /// <summary>Phrases treated as watermark text: Nutrient's trial stamp, and every --ignore-text phrase.</summary>
+        private static List<string[]> WatermarkPhrases(Options options)
+        {
+            var phrases = new List<string[]> { IgnoredText.Tokenize("Nutrient SDK Trial Version", options) };
+            phrases.AddRange(options.IgnorePhrases);
+            return phrases;
+        }
+
+        private static bool IsWatermark(bool[] watermarks, int i)
+        {
+            return watermarks != null && i < watermarks.Length && watermarks[i];
         }
 
         /// <summary>Title of a blue arrow, one that passes over text other than the two lines it joins.</summary>

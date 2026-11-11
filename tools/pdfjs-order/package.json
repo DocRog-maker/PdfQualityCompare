@@ -1,0 +1,10 @@
+{
+  "name": "pdfjs-order",
+  "private": true,
+  "description": "Reads a PDF's text the way Firefox's PDF viewer (pdf.js) does, for PdfQualityCompare's pdf.js reading-order overlay.",
+  "type": "module",
+  "engines": { "node": ">=22.13.0" },
+  "dependencies": {
+    "pdfjs-dist": "6.5.438"
+  }
+}

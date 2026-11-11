@@ -171,6 +171,18 @@ namespace PdfQualityCompare
             string orderDir = options.ReadingOrder ? Path.Combine(options.OutputDir, "reading-order") : null;
             if (orderDir != null) Directory.CreateDirectory(orderDir);
 
+            string muOrderDir = options.MuPdfReadingOrder ? Path.Combine(options.OutputDir, "reading-order-mupdf") : null;
+            if (muOrderDir != null) Directory.CreateDirectory(muOrderDir);
+
+            string jsOrderDir = null, jsTextDir = null;
+            if (options.PdfJsReadingOrder)
+            {
+                jsOrderDir = Path.Combine(options.OutputDir, "reading-order-pdfjs");
+                jsTextDir = Path.Combine(options.OutputDir, "text-pdfjs");
+                Directory.CreateDirectory(jsOrderDir);
+                Directory.CreateDirectory(jsTextDir);
+            }
+
             var results = new DocResult[pairs.Count];
             int done = 0;
             // Workers inside a comparison right now, and the highest count already drawn.
@@ -193,6 +205,17 @@ namespace PdfQualityCompare
                     if (orderDir != null)
                         ReadingOrderOverlay.Write(pairs[i].Name, pairs[i].ReferencePdf, pairs[i].CandidatePdf, orderDir,
                                                   options.Palette);
+                    if (muOrderDir != null)
+                        ReadingOrderOverlay.Write(pairs[i].Name, pairs[i].ReferencePdf, pairs[i].CandidatePdf, muOrderDir,
+                                                  options.Palette, options.Mutool);
+                    if (jsOrderDir != null)
+                    {
+                        string name = pairs[i].Name;
+                        ReadingOrderOverlay.Write(name, pairs[i].ReferencePdf, pairs[i].CandidatePdf, jsOrderDir,
+                            options.Palette,
+                            side => new ReadingOrderOverlay.PdfJsSource(options.Node, options.PdfJsTool,
+                                ReadingOrderOverlay.Target(jsTextDir, name, side, ".txt"), options));
+                    }
 
                     Interlocked.Add(ref busyTicks, Stopwatch.GetTimestamp() - started);
                     int n = Interlocked.Increment(ref done);
@@ -247,6 +270,16 @@ namespace PdfQualityCompare
             }
             Console.WriteLine("Text    : {0}", textDir);
             if (orderDir != null) Console.WriteLine("Order   : {0}", orderDir);
+            if (muOrderDir != null) Console.WriteLine("MuPDF   : {0}", muOrderDir);
+            if (jsOrderDir != null)
+            {
+                Console.WriteLine("pdf.js  : {0} (text in {1})", jsOrderDir, jsTextDir);
+                long seen, matched;
+                PdfJsLines.Placement(out seen, out matched);
+                if (seen > 0)
+                    Console.WriteLine("          {0:N0} of {1:N0} words ({2:P1}) placed by an Apryse word; the rest where pdf.js puts them.",
+                                      matched, seen, (double)matched / seen);
+            }
             Console.WriteLine("Report  : {0}", html);
             Console.WriteLine("CSV     : {0}", csv);
             Console.WriteLine("Details : {0}", json);

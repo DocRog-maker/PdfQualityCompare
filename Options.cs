@@ -135,6 +135,27 @@ namespace PdfQualityCompare
 
         /// <summary>Colour scale the reading-order copies number their lines along.</summary>
         public Palette Palette = Palette.Turbo;
+
+        /// <summary>Also write reading-order copies with the lines and their order read by MuPDF.</summary>
+        public bool MuPdfReadingOrder;
+
+        /// <summary>
+        /// mutool.exe, or the folder holding it, as given by --mutool; resolved to the file
+        /// itself once the arguments are parsed.
+        /// </summary>
+        public string Mutool;
+
+        /// <summary>
+        /// Also write reading-order copies in the order Firefox copies the text: pdf.js's
+        /// order, drawn with Apryse's word boxes, plus the text itself.
+        /// </summary>
+        public bool PdfJsReadingOrder;
+
+        /// <summary>node.exe or its folder, from --node; resolved to the file once parsed.</summary>
+        public string Node;
+
+        /// <summary>The tools\pdfjs-order folder, from --pdfjs-tool; found next to the exe if not given.</summary>
+        public string PdfJsTool;
         public double VisualDpi = 72;
 
         /// <summary>Grey-level delta (0-255) above which two pixels count as different.</summary>
@@ -229,8 +250,18 @@ Options:
   --highlight-moves       Let that comparison also highlight moved text (counts moves as differences).
   --no-reading-order      Skip the copies of each side with every text line boxed and
                           numbered in the order it is read (reading-order\).
-  --palette <turbo|viridis>
-                          Colours for those copies (default: turbo).
+  --palette <turbo|viridis|none>
+                          Colours for those copies (default: turbo). none draws no
+                          boxes, only each piece's number on a plain dark tab.
+  --mupdf-reading-order   Also write those copies with the lines and their order as MuPDF
+                          reads them (reading-order-mupdf\). Runs mutool, found from
+                          --mutool, the MUTOOL environment variable or the PATH.
+  --mutool <path>         mutool.exe, or the folder holding it. Implies --mupdf-reading-order.
+  --pdfjs-reading-order   Also write those copies in the order Firefox copies the text
+                          (reading-order-pdfjs\), and that text (text-pdfjs\). Runs pdf.js
+                          under Node; positions come from Apryse's words.
+  --node <path>           node.exe, or its folder (default: the PATH).
+  --pdfjs-tool <dir>      The tools\pdfjs-order folder (default: found above the exe).
   --visual                Also rasterise and measure pixel differences (slow).
   --visual-dpi <n>        DPI for the raster comparison (default: 72).
   --visual-threshold <n>  Grey delta 0-255 counted as a pixel difference (default: 32).
@@ -335,12 +366,25 @@ Examples:
                         {
                             case "turbo": o.Palette = Palette.Turbo; break;
                             case "viridis": o.Palette = Palette.Viridis; break;
-                            default: error = "--palette must be turbo or viridis, not " + name; break;
+                            case "none": o.Palette = Palette.None; break;
+                            default: error = "--palette must be turbo, viridis or none, not " + name; break;
                         }
                         break;
                     }
                     case "--no-reading-order":
                         o.ReadingOrder = false; break;
+                    case "--pdfjs-reading-order":
+                        o.PdfJsReadingOrder = true; break;
+                    case "--node":
+                        o.Node = Next(args, ref i, ref error); break;
+                    case "--pdfjs-tool":
+                        o.PdfJsTool = Next(args, ref i, ref error); break;
+                    case "--mupdf-reading-order":
+                        o.MuPdfReadingOrder = true; break;
+                    case "--mutool":
+                        o.Mutool = Next(args, ref i, ref error);
+                        o.MuPdfReadingOrder = o.Mutool != null;
+                        break;
                     case "--visual":
                         o.Visual = true; break;
                     case "--visual-dpi":
@@ -388,6 +432,46 @@ Examples:
             {
                 error = "--cand-label " + pendingLabel + " names no candidate.";
                 return null;
+            }
+
+            if (o.MuPdfReadingOrder)
+            {
+                string found = MuPdfLines.Locate(o.Mutool);
+                if (found == null)
+                {
+                    error = o.Mutool != null
+                        ? "--mutool: no mutool.exe at " + o.Mutool
+                        : "--mupdf-reading-order needs mutool: pass --mutool <path>, set MUTOOL, or put mutool.exe on the PATH.";
+                    return null;
+                }
+                o.Mutool = found;
+            }
+
+            if (o.PdfJsReadingOrder)
+            {
+                string node = PdfJsLines.LocateNode(o.Node);
+                if (node == null)
+                {
+                    error = o.Node != null
+                        ? "--node: no node.exe at " + o.Node
+                        : "--pdfjs-reading-order needs Node.js: pass --node <path> or put node.exe on the PATH.";
+                    return null;
+                }
+                string tool = PdfJsLines.LocateTool(o.PdfJsTool);
+                if (tool == null)
+                {
+                    error = o.PdfJsTool != null
+                        ? "--pdfjs-tool: no extract.mjs in " + o.PdfJsTool
+                        : "--pdfjs-reading-order cannot find tools\\pdfjs-order; pass --pdfjs-tool <dir>.";
+                    return null;
+                }
+                if (!PdfJsLines.Installed(tool))
+                {
+                    error = "pdf.js is not installed in " + tool + ": run npm install there first.";
+                    return null;
+                }
+                o.Node = node;
+                o.PdfJsTool = tool;
             }
 
             o.ReferenceRoot = Path.GetFullPath(o.ReferenceRoot);

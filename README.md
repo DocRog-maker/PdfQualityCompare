@@ -102,7 +102,10 @@ highlighted copy of each side.
 | `--explain <name>` | Diagnose a single document instead of running a batch. |
 | `--visual-dpi <n>` | Comparison resolution; rendering happens at twice this. |
 | `--no-reading-order` | Skip the copies of both PDFs that show the order their text is read in. |
-| `--palette <turbo\|viridis>` | Colours for those copies (default turbo). |
+| `--palette <turbo\|viridis\|none>` | Colours for those copies (default turbo); `none` draws only the numbers, no boxes. |
+| `--mupdf-reading-order` | Also write those copies with the lines and order MuPDF reads (needs mutool). |
+| `--mutool <path>` | mutool.exe or its folder; implies `--mupdf-reading-order`. Otherwise `MUTOOL` or the PATH. |
+| `--pdfjs-reading-order` | Also write those copies in the order Firefox copies the text, and that text. Needs Node.js. |
 | `--no-annotations` | Skip the Apryse `HighlightTextDiff` pass (it costs about 5s per 100 documents). |
 | `--highlight-moves` | Let that pass mark moved text too, which counts moves as differences. |
 | `--ocr` | Both runs are OCR of the same scans; see below. |
@@ -280,6 +283,47 @@ With a single candidate, written to the `--out` directory:
   `Reading order jump`, so a viewer's comment panel can be filtered to all of them by
   subject, or to one kind by author, to step through the places the order jumps.
   `--no-reading-order` skips the copies and the folder is not created.
+- **`reading-order-mupdf/`** — only with `--mupdf-reading-order` (or `--mutool`). The same
+  copies, boxes, numbers and arrows as `reading-order/`, but with the lines and their order
+  taken from MuPDF instead of the Apryse TextExtractor, so the two engines' reading orders
+  can be put side by side. MuPDF is run as `mutool draw -F stext` (any recent release from
+  mupdf.com) rather than linked in, so the tool gains no second PDF library; its line
+  boxes are mapped from MuPDF's page space back into PDF space, allowing for crop box,
+  `/Rotate` and `UserUnit`. A line in MuPDF's output is often shorter than a TextExtractor
+  line, so expect more boxes, and more arrows, for the same page.
+- **`reading-order-pdfjs/`** and **`text-pdfjs/`** — only with `--pdfjs-reading-order`. The
+  order a person gets by selecting the text in Firefox and copying it, which is often not
+  the order the Apryse TextExtractor reads. `text-pdfjs/` holds exactly that clipboard
+  text (form feed between pages, as in `text/`), and `reading-order-pdfjs/` draws it with
+  the same boxes, numbers and arrows as `reading-order/`, so a red or blue arrow is a place
+  where the copied text jumps.
+
+  Firefox's PDF viewer is pdf.js, so pdf.js itself is run (`tools/pdfjs-order/extract.mjs`
+  under Node). The copied text is pdf.js's text items joined in the order it returns them,
+  with a line break after each item it marks as ending a line - the viewer puts one span
+  per item in its text layer, and a selection copies the spans in that order.
+
+  The order comes from pdf.js but the positions come from Apryse: each copied word is
+  matched to the Apryse word on the same page with the same text (the nearest one, where
+  the word occurs more than once) and drawn with that word's box. The words are then
+  joined into pieces that run along one line, so text the copy takes out of place gets
+  a number and an arrow of its own. The run summary says how many words were placed this
+  way; any the TextExtractor has no match for are drawn where pdf.js puts them. A word is
+  only matched to an Apryse word on the same line and within a word or two of where
+  pdf.js puts it, so a word Apryse split or joined differently cannot take the same word
+  from another line.
+
+  Watermark text is picked out. A piece holding any part of `Nutrient SDK Trial Version`,
+  or of a `--ignore-text` phrase, gets a purple number, and the arrows into and out of it
+  are purple and titled `Watermark artifact` instead of red, blue or green - the jump is
+  the stamp's, not the document's. Filter a viewer's comment panel to that author to see
+  them all, or select them there and delete them in one go.
+
+  Setup, once: install Node.js 22.13 or later, then
+  `cd tools\pdfjs-order` and `npm install`. The tool finds `tools\pdfjs-order` above the
+  exe and `node.exe` on the PATH; `--pdfjs-tool <dir>` and `--node <path>` override them.
+  pdf.js is pinned in `package.json`; match it to the Firefox release you care about if
+  the two drift apart.
 
 With several candidates those move into a sub-folder per candidate, named after it,
 and `--out` itself holds the comparison between them:
